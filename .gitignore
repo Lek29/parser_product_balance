@@ -1,0 +1,29 @@
+# Секреты
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Виртуальное окружение
+.venv/
+venv/
+
+# Рабочие данные (генерируются при работе бота)
+temp/
+storage/current.xlsx
+storage/meta.json
+storage/data.json
+storage/auth.json
+storage/filtered.xlsx
+
+# Логи
+*.log
+
+# Скрипты разработки
+test.py
+
+# IDE / служебные
+/docs
+/.cursor
