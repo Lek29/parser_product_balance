@@ -20,7 +20,7 @@ Telegram-бот для мониторинга товарных остатков.
 | Компонент | Технология |
 |-----------|-----------|
 | Язык | Python 3.12 |
-| Telegram | python-telegram-bot 20+ (async) |
+| Telegram | python-telegram-bot 22.x (async) |
 | Почта | imaplib + IMAP SSL |
 | Excel | openpyxl |
 | Планировщик | APScheduler 3.x (BackgroundScheduler) |
@@ -37,7 +37,8 @@ Telegram-бот для мониторинга товарных остатков.
 ├── config.py                # Загрузка переменных окружения
 ├── requirements.txt
 ├── Dockerfile
-├── docker-compose.yml
+├── docker-compose.yaml
+├── .dockerignore
 │
 ├── bot/
 │   ├── handlers.py          # Хэндлеры команд и кнопок
@@ -46,6 +47,13 @@ Telegram-бот для мониторинга товарных остатков.
 ├── parser/
 │   ├── mail_fetcher.py      # IMAP: скачивание и распаковка архива с почты
 │   └── excel_parser.py      # Парсинг xlsx, фильтрация, генерация выгрузки
+│
+├── services/
+│   └── stock_pipeline.py    # Парсинг → data.json → filtered.xlsx (после загрузки с почты)
+│
+├── scripts/
+│   ├── dev_fetch_mail.py    # Разовая проверка почты без бота (разработка)
+│   └── show_meta.py         # Печать storage/meta.json в консоль (диагностика)
 │
 ├── scheduler/
 │   └── tasks.py             # APScheduler: еженедельный автозапуск
@@ -60,6 +68,17 @@ Telegram-бот для мониторинга товарных остатков.
 ├── temp/                    # Временные файлы при распаковке архивов
 └── docs/                    # Документация проекта
 ```
+
+### Источники данных
+
+| Файл | Роль |
+|------|------|
+| `storage/current.xlsx` | Актуальная таблица остатков с почты; основной вход для парсинга и кнопок бота. |
+| `storage/meta.json` | Дата/метаданные последнего письма и загрузки; статус «актуально на …» в боте. |
+| `storage/data.json` | **Производный** кэш полного списка позиций после парсинга (не источник истины в рантайме). |
+| `storage/filtered.xlsx` | Глобальная выгрузка «малый остаток» после пайплайна. |
+
+Пайплайн после успешной загрузки с почты: парсинг xlsx → запись `data.json` → фильтр → `filtered.xlsx` (порядок фиксирован в `services/stock_pipeline.py`).
 
 ---
 
@@ -109,6 +128,15 @@ pip install -r requirements.txt
 python main.py
 ```
 
+Минимальные тесты (без сети и Telegram):
+
+```bash
+pytest tests/
+```
+
+Разовая проверка загрузки с почты без бота: `python scripts/dev_fetch_mail.py` (нужен валидный `.env`).  
+Просмотр `meta.json`: `python scripts/show_meta.py`.
+
 > На Linux для поддержки `.rar` установите `unrar`:
 > ```bash
 > sudo apt-get install unrar-free
@@ -116,11 +144,15 @@ python main.py
 
 ### Docker
 
+Файл: `docker-compose.yaml` (совместим с `docker compose` v2).
+
 ```bash
 docker compose up -d --build
 ```
 
-Данные из `storage/` и `temp/` монтируются в контейнер как volumes — сохраняются между перезапусками.
+Часовой пояс контейнера: `Europe/Moscow` (совпадает с планировщиком APScheduler).  
+Данные из `storage/` и `temp/` монтируются как volumes — сохраняются между перезапусками.  
+Сборка использует `.dockerignore` (в образ не попадают тесты, `.git`, `.env` и т.д.).
 
 ---
 
@@ -171,5 +203,7 @@ Inline-меню:
 1. Подключиться к IMAP, найти последнее письмо с архивом
 2. Сравнить дату письма с `meta.json` — если уже актуально, пропустить
 3. Скачать и распаковать архив → `storage/current.xlsx`
-4. Распарсить таблицу → `storage/data.json`
+4. Распарсить таблицу → `storage/data.json` (кэш полного списка)
 5. Сгенерировать выгрузку → `storage/filtered.xlsx`
+
+При очень большом числе товарных групп reply-клавиатура «частичной фильтрации» может стать громоздкой; возможная пагинация групп — отдельная доработка (см. `docs/refactoring-plan2.md`).

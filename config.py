@@ -6,6 +6,7 @@
 """
 
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,12 +39,21 @@ BOT_PASSWORD: str = _require("BOT_PASSWORD")
 
 # --- Параметры фильтрации ---
 STOCK_THRESHOLD: int = int(os.getenv("STOCK_THRESHOLD", "5"))
+# Частичная фильтрация (docs/partial_filtering.md, шаг 5):
+# Пустой черновик — без STOCK_THRESHOLD; задайте порог хотя бы одной группы.
+# 0 позиций после отбора — файл не шлём, только сообщение в чат.
 
 # --- Пути ---
 BASE_DIR: str = os.path.dirname(os.path.abspath(__file__))
 TEMP_DIR: str = os.path.join(BASE_DIR, "temp")
 STORAGE_DIR: str = os.path.join(BASE_DIR, "storage")
 CURRENT_XLSX_PATH: str = os.path.join(STORAGE_DIR, "current.xlsx")
+# Глобальный filtered.xlsx: планировщик, актуализация, «Получить…».
+FILTERED_XLSX_PATH: str = os.path.join(STORAGE_DIR, "filtered.xlsx")
+# Частичная выгрузка; планировщик (scheduler) этот путь не использует.
+FILTERED_PARTIAL_XLSX_PATH: str = os.path.join(
+    STORAGE_DIR, "filtered_partial.xlsx"
+)
 META_JSON_PATH: str = os.path.join(STORAGE_DIR, "meta.json")
 DATA_JSON_PATH: str = os.path.join(STORAGE_DIR, "data.json")
 AUTH_JSON_PATH: str = os.path.join(STORAGE_DIR, "auth.json")

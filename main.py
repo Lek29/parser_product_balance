@@ -2,13 +2,14 @@
 Точка входа приложения.
 
 Запускает планировщик задач APScheduler в фоновом потоке и Telegram-бота
-в режиме polling. Корректно завершает работу при Ctrl+C.
+в режиме polling (python-telegram-bot, HTTPS к Bot API). Корректно завершает
+работу при Ctrl+C.
 """
 
 import logging
 
-from telegram import BotCommand
-from telegram.ext import Application
+from telegram import BotCommand, Update
+from telegram.ext import Application, ContextTypes
 
 import config
 from bot.handlers import register_handlers
@@ -22,17 +23,45 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _log_errors(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Логирует необработанные исключения из хэндлеров (без падения процесса).
+
+    :param update: Объект Update или ``None`` (например при ошибке вне хэндлера).
+    :type update: object
+    :param context: Контекст PTB с полем ``error``.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :returns: None
+    """
+    err = context.error
+    logger.error(
+        "Необработанное исключение в хэндлере: %s",
+        err,
+        exc_info=err,
+    )
+    if update is not None:
+        logger.debug("update_id при ошибке: %s", getattr(update, "update_id", update))
+
+
 async def post_init(app: Application) -> None:
     """
     Вызывается после инициализации Application перед запуском polling.
 
-    Регистрирует команды бота в меню Telegram (кнопка ☰ Menu слева от поля ввода).
+    Регистрирует команды бота в меню Telegram
+    (кнопка ☰ Menu слева от поля ввода).
     Пользователь видит список доступных команд с описаниями.
 
     :param app: Экземпляр Application из python-telegram-bot.
     :type app: Application
     :returns: None
     """
+    me = await app.bot.get_me()
+    logger.info(
+        "Telegram: бот @%s (id=%s), can_join_groups=%s",
+        me.username,
+        me.id,
+        me.can_join_groups,
+    )
     await app.bot.set_my_commands([
         BotCommand("start", "Запустить / Главное меню"),
         BotCommand("help",  "Справка по боту"),
@@ -56,22 +85,32 @@ def main() -> None:
     scheduler.start()
     logger.info("Планировщик запущен.")
 
-    app = (
-        Application.builder()
-        .token(config.TELEGRAM_BOT_TOKEN)
-        .post_init(post_init)
-        .read_timeout(60)
-        .write_timeout(120)
-        .connect_timeout(30)
-        .build()
-    )
-    register_handlers(app)
+    try:
+        builder = (
+            Application.builder()
+            .token(config.TELEGRAM_BOT_TOKEN)
+            .post_init(post_init)
+            .read_timeout(60)
+            .write_timeout(120)
+            .connect_timeout(30)
+        )
+        app = builder.build()
+        app.add_error_handler(_log_errors)
+        register_handlers(app)
 
-    logger.info("Бот запущен. Ожидание сообщений... (Ctrl+C для остановки)")
-    app.run_polling(stop_signals=None)
-
-    scheduler.shutdown()
-    logger.info("Планировщик остановлен. Приложение завершено.")
+        logger.info(
+            "Бот запущен (python-telegram-bot). "
+            "Ожидание сообщений... (Ctrl+C для остановки)",
+        )
+        app.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+            bootstrap_retries=-1,
+            stop_signals=None,
+        )
+    finally:
+        scheduler.shutdown()
+        logger.info("Планировщик остановлен. Приложение завершено.")
 
 
 if __name__ == "__main__":

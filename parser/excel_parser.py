@@ -3,7 +3,10 @@
 
 Читает storage/current.xlsx, определяет иерархию товаров по отступу ячеек (indent),
 фильтрует позиции с количеством <= STOCK_THRESHOLD и формирует структурированный список.
-Также умеет генерировать отфильтрованный .xlsx для отправки пользователю.
+Список групп — :func:`list_product_groups`; частичный отбор —
+:func:`filter_by_group_thresholds`; отдельный файл частичной выгрузки —
+:func:`generate_filtered_partial_xlsx`. Глобальный отфильтрованный .xlsx —
+:func:`generate_filtered_xlsx`.
 
 Структура иерархии по indent:
     indent 4  — категория верхнего уровня (Аксессуары, Мячи)
@@ -42,6 +45,9 @@ INDENT_TO_LEVEL = {
     6.0: "subcategory",
     8.0: "brand",
 }
+
+# Имя группы для позиций без категории верхнего уровня (пустой top_category после parse_stock).
+TOP_CATEGORY_FALLBACK_LABEL: str = "Без группы"
 
 
 def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
@@ -133,6 +139,46 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
     return items
 
 
+def normalize_top_category_label(raw: str) -> str:
+    """
+    Приводит сырое значение ``top_category`` к имени группы для UI и словарей порогов.
+
+    Пустая строка и строка из пробелов заменяются на :data:`TOP_CATEGORY_FALLBACK_LABEL`,
+    чтобы в списках групп не было «пустых» кнопок и ключи совпадали с :func:`list_product_groups`.
+
+    :param raw: Значение поля ``top_category`` из словаря позиции.
+    :type raw: str
+    :returns: Непустая метка группы.
+    :rtype: str
+    """
+    text = (raw or "").strip()
+    return text if text else TOP_CATEGORY_FALLBACK_LABEL
+
+
+def list_product_groups(xlsx_path: Optional[str] = None) -> list[str]:
+    """
+    Возвращает уникальные группы товара верхнего уровня для reply-меню частичной фильтрации.
+
+    Источник данных — тот же, что у :func:`parse_stock`: по умолчанию актуальный
+    ``storage/current.xlsx`` (после «Актуализировать» или фоновой загрузки с почты).
+    Учитываются только товарные строки с числовым количеством; заголовки категорий
+    без ни одной такой позиции в выборку не попадают.
+
+    :param xlsx_path: Путь к xlsx. По умолчанию :data:`config.CURRENT_XLSX_PATH`.
+    :type xlsx_path: Optional[str]
+    :returns: Отсортированный по алфавиту список имён групп (пустой ``top_category``
+              даёт одну группу :data:`TOP_CATEGORY_FALLBACK_LABEL`).
+    :rtype: list[str]
+
+    :example:
+    >>> groups = list_product_groups()
+    >>> # ['Аксессуары', 'Велосипеды', ...]
+    """
+    items = parse_stock(xlsx_path)
+    labels = {normalize_top_category_label(item.get("top_category", "")) for item in items}
+    return sorted(labels, key=lambda s: s.casefold())
+
+
 def filter_by_threshold(
     items: list[dict],
     threshold: Optional[int] = None,
@@ -158,6 +204,58 @@ def filter_by_threshold(
     return result
 
 
+def filter_by_group_thresholds(
+    items: list[dict],
+    thresholds_by_group: dict[str, int],
+) -> list[dict]:
+    """
+    Частичная фильтрация: для каждой группы свой порог ``quantity <= порог``.
+
+    Имя группы берётся как :func:`normalize_top_category_label` от поля
+    ``top_category`` позиции — те же строки, что в :func:`list_product_groups`
+    и в черновике порогов бота.
+
+    **Поведение для групп без ключа в словаре:** позиции этих групп **не
+    включаются** в результат. В выгрузку попадают только группы, для которых
+    пользователь задал порог, и только строки с количеством не выше этого
+    порога.
+
+    При пустом ``thresholds_by_group`` возвращается пустой список.
+
+    :param items: Полный список позиций (результат :func:`parse_stock`).
+    :type items: list[dict]
+    :param thresholds_by_group: Нормализованное имя группы → порог включительно.
+    :type thresholds_by_group: dict[str, int]
+    :returns: Позиции, прошедшие условие по своей группе.
+    :rtype: list[dict]
+    :side effects: Нет (чистая функция); пишет в лог.
+
+    :example:
+    >>> all_items = parse_stock()
+    >>> rules = {"Велосипеды": 3, "Бассейн": 5}
+    >>> low = filter_by_group_thresholds(all_items, rules)
+    """
+    if not thresholds_by_group:
+        logger.info("Частичный фильтр: словарь порогов пуст — 0 позиций.")
+        return []
+
+    result: list[dict] = []
+    for item in items:
+        group = normalize_top_category_label(item.get("top_category", ""))
+        if group not in thresholds_by_group:
+            continue
+        limit = thresholds_by_group[group]
+        if item["quantity"] <= limit:
+            result.append(item)
+
+    logger.info(
+        "Частичный фильтр: правил %d, позиций в результате: %d",
+        len(thresholds_by_group),
+        len(result),
+    )
+    return result
+
+
 def get_filtered_items(threshold: Optional[int] = None) -> list[dict]:
     """
     Удобная обёртка: читает текущий файл и возвращает отфильтрованные позиции.
@@ -173,6 +271,30 @@ def get_filtered_items(threshold: Optional[int] = None) -> list[dict]:
     return filter_by_threshold(all_items, threshold)
 
 
+def generate_filtered_partial_xlsx(
+    items: list[dict],
+    output_path: Optional[str] = None,
+) -> str:
+    """
+    Сохраняет частично отфильтрованные остатки в отдельный файл.
+
+    Формат таблицы тот же, что у :func:`generate_filtered_xlsx` (те же поля
+    в элементах ``items``). Путь по умолчанию — :data:`config.FILTERED_PARTIAL_XLSX_PATH`,
+    чтобы не перезаписывать глобальный ``filtered.xlsx`` из планировщика.
+
+    :param items: Результат :func:`filter_by_group_thresholds`.
+    :type items: list[dict]
+    :param output_path: Путь для сохранения. По умолчанию частичный файл в storage.
+    :type output_path: Optional[str]
+    :returns: Путь к сохранённому xlsx.
+    :rtype: str
+    :side effects: Создаёт/перезаписывает файл на диске (делегирует
+                   :func:`generate_filtered_xlsx`).
+    """
+    path = output_path or config.FILTERED_PARTIAL_XLSX_PATH
+    return generate_filtered_xlsx(items, output_path=path)
+
+
 def generate_filtered_xlsx(
     items: list[dict],
     output_path: Optional[str] = None,
@@ -185,9 +307,11 @@ def generate_filtered_xlsx(
     стандартными кнопками Excel. Кнопки управления группой расположены сверху (над группой).
     Строки с остатком <= 1 подсвечиваются красным.
 
-    :param items: Список отфильтрованных товарных позиций (результат filter_by_threshold).
+    :param items: Отфильтрованные позиции (``filter_by_threshold`` или
+                  :func:`filter_by_group_thresholds` — структура словаря та же).
     :type items: list[dict]
-    :param output_path: Путь для сохранения файла. По умолчанию storage/filtered.xlsx.
+    :param output_path: Путь для сохранения. По умолчанию
+                        :data:`config.FILTERED_XLSX_PATH`.
     :type output_path: Optional[str]
     :returns: Абсолютный путь к сохранённому файлу.
     :rtype: str
@@ -197,7 +321,7 @@ def generate_filtered_xlsx(
     >>> path = generate_filtered_xlsx(items)
     >>> print(f"Файл готов: {path}, позиций: {len(items)}")
     """
-    path = output_path or os.path.join(config.STORAGE_DIR, "filtered.xlsx")
+    path = output_path or config.FILTERED_XLSX_PATH
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
     wb = Workbook()
@@ -231,13 +355,23 @@ def generate_filtered_xlsx(
         cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    # --- Группируем по top_category ---
-    sorted_items = sorted(items, key=lambda x: (x.get("top_category", ""), x.get("subcategory", ""), x.get("brand", "")))
+    # --- Группируем по нормализованной верхней категории (как в list_product_groups / частичном фильтре) ---
+    def _group_key(it: dict) -> str:
+        return normalize_top_category_label(it.get("top_category", ""))
+
+    sorted_items = sorted(
+        items,
+        key=lambda x: (
+            _group_key(x),
+            x.get("subcategory", "") or "",
+            x.get("brand", "") or "",
+        ),
+    )
 
     current_row = 2
     item_counter = 0  # для чередования цвета внутри группы
 
-    for category, group in groupby(sorted_items, key=lambda x: x.get("top_category", "Без категории")):
+    for category, group in groupby(sorted_items, key=_group_key):
         group_list = list(group)
 
         # --- Строка заголовка категории ---

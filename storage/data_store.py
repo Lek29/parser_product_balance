@@ -9,13 +9,56 @@
 import json
 import logging
 import os
+import tempfile
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from typing import Optional
+from typing import Any, Optional
 
 import config
 
 logger = logging.getLogger(__name__)
+
+# Кэш списка авторизованных пользователей (синхронизируется с mtime auth.json и после записи).
+_auth_ids_cache: Optional[tuple[int, ...]] = None
+_auth_cache_mtime: Optional[float] = None
+
+
+def atomic_write_json(path: str, obj: Any, **dump_kwargs: Any) -> None:
+    """
+    Атомарно записывает JSON: временный файл в каталоге назначения, затем ``os.replace``.
+
+    Снижает риск обрезанного ``.json`` при аварийном завершении процесса во время записи.
+
+    :param path: Целевой путь (например ``storage/data.json``).
+    :type path: str
+    :param obj: Объект, сериализуемый ``json.dump``.
+    :type obj: Any
+    :param dump_kwargs: Аргументы для ``json.dump`` (``indent``, ``ensure_ascii`` и т.д.).
+    :type dump_kwargs: Any
+    :returns: None
+    :raises OSError: При ошибках ФС.
+    """
+    if "ensure_ascii" not in dump_kwargs:
+        dump_kwargs["ensure_ascii"] = False
+    abs_path = os.path.abspath(path)
+    directory = os.path.dirname(abs_path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".tmp",
+        prefix=".json_",
+        dir=directory,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, **dump_kwargs)
+        os.replace(tmp_path, abs_path)
+    except Exception:
+        try:
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def save_items(items: list[dict]) -> None:
@@ -31,14 +74,12 @@ def save_items(items: list[dict]) -> None:
     >>> from storage.data_store import save_items
     >>> save_items(parse_stock())
     """
-    os.makedirs(config.STORAGE_DIR, exist_ok=True)
     payload = {
         "updated_at": datetime.now().isoformat(),
         "count": len(items),
         "items": items,
     }
-    with open(config.DATA_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    atomic_write_json(config.DATA_JSON_PATH, payload, indent=2)
     logger.info("Сохранено %d позиций в %s", len(items), config.DATA_JSON_PATH)
 
 
@@ -46,23 +87,40 @@ def load_items() -> list[dict]:
     """
     Читает все товарные позиции из storage/data.json.
 
+    **Резерв / вспомогательный API:** в рантайме бота источник позиций для логики —
+    ``current.xlsx`` (парсинг через :func:`parser.excel_parser.parse_stock`). Поле
+    ``items`` в JSON — производный снимок после успешного пайплайна сохранения.
+
     :returns: Список позиций или пустой список если файл не существует.
     :rtype: list[dict]
     """
     if not os.path.exists(config.DATA_JSON_PATH):
         logger.warning("data.json не найден, возвращаем пустой список.")
         return []
-    with open(config.DATA_JSON_PATH, "r", encoding="utf-8") as f:
-        payload = json.load(f)
+    try:
+        with open(config.DATA_JSON_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except json.JSONDecodeError as e:
+        logger.error(
+            "data.json повреждён (load_items): %s. Возвращаем пустой список.",
+            e,
+        )
+        return []
+    if not isinstance(payload, dict):
+        return []
     return payload.get("items", [])
 
 
-def get_last_update_dt() -> Optional[datetime]:
+def read_meta_json() -> Optional[dict[str, Any]]:
     """
-    Возвращает дату и время последнего обновления данных из meta.json.
+    Единая точка чтения ``storage/meta.json`` для статуса и сравнения дат.
 
-    :returns: datetime объект или None если meta.json не существует или повреждён.
-    :rtype: Optional[datetime]
+    Используется вместо разрозненных ``open``+``json.load`` в нескольких функциях,
+    чтобы логика обработки повреждённого файла была согласована.
+
+    :returns: Словарь метаданных или ``None``, если файла нет, JSON невалиден
+              или корень не объект.
+    :rtype: Optional[dict[str, Any]]
     """
     if not os.path.exists(config.META_JSON_PATH):
         return None
@@ -70,12 +128,11 @@ def get_last_update_dt() -> Optional[datetime]:
         with open(config.META_JSON_PATH, "r", encoding="utf-8") as f:
             meta = json.load(f)
     except json.JSONDecodeError as e:
-        logger.error("meta.json повреждён (get_last_update_dt): %s", e)
+        logger.error("meta.json повреждён (read_meta_json): %s", e)
         return None
-    updated_at = meta.get("updated_at")
-    if not updated_at:
+    if not isinstance(meta, dict):
         return None
-    return datetime.fromisoformat(updated_at)
+    return meta
 
 
 def get_last_email_date_str() -> Optional[str]:
@@ -90,13 +147,8 @@ def get_last_email_date_str() -> Optional[str]:
     >>> get_last_email_date_str()
     'Mon, 9 Mar 2026 09:00:51 +0800'
     """
-    if not os.path.exists(config.META_JSON_PATH):
-        return None
-    try:
-        with open(config.META_JSON_PATH, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-    except json.JSONDecodeError as e:
-        logger.error("meta.json повреждён (get_last_email_date_str): %s", e)
+    meta = read_meta_json()
+    if meta is None:
         return None
     return meta.get("email_date")
 
@@ -144,7 +196,7 @@ def cleanup_old_data() -> None:
     """
     Удаляет все устаревшие файлы данных перед сохранением новых остатков.
 
-    Удаляет: current.xlsx, filtered.xlsx, data.json, meta.json.
+    Удаляет: current.xlsx, filtered.xlsx, filtered_partial.xlsx, data.json, meta.json.
     Не затрагивает auth.json — список авторизованных пользователей сохраняется.
     Безопасен: отсутствующие файлы пропускаются без ошибок.
 
@@ -156,7 +208,8 @@ def cleanup_old_data() -> None:
     """
     files_to_delete = [
         config.CURRENT_XLSX_PATH,
-        os.path.join(config.STORAGE_DIR, "filtered.xlsx"),
+        config.FILTERED_XLSX_PATH,
+        config.FILTERED_PARTIAL_XLSX_PATH,
         config.DATA_JSON_PATH,
         config.META_JSON_PATH,
     ]
@@ -173,6 +226,10 @@ def _load_auth() -> list[int]:
     """
     Читает список авторизованных chat_id из storage/auth.json.
 
+    Кэширует результат по ``mtime`` файла, чтобы не читать диск на каждое
+    сообщение. После :func:`_save_auth` кэш обновляется явно. Если файл
+    изменён извне (другой процесс), при смене ``mtime`` список перечитывается.
+
     При повреждении файла (пустой, обрезанный, невалидный JSON) логирует
     ошибку и возвращает пустой список — бот продолжает работу, пользователям
     предлагается повторно ввести пароль.
@@ -181,18 +238,51 @@ def _load_auth() -> list[int]:
               не существует или повреждён.
     :rtype: list[int]
     """
-    if not os.path.exists(config.AUTH_JSON_PATH):
+    global _auth_ids_cache, _auth_cache_mtime
+
+    path = config.AUTH_JSON_PATH
+    if not os.path.exists(path):
+        _auth_ids_cache = tuple()
+        _auth_cache_mtime = None
         return []
+
     try:
-        with open(config.AUTH_JSON_PATH, "r", encoding="utf-8") as f:
-            return json.load(f).get("authorized", [])
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = None
+
+    if (
+        _auth_ids_cache is not None
+        and mtime is not None
+        and _auth_cache_mtime == mtime
+    ):
+        return list(_auth_ids_cache)
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        ids = raw.get("authorized", []) if isinstance(raw, dict) else []
+        if not isinstance(ids, list):
+            ids = []
+        out: list[int] = []
+        for x in ids:
+            try:
+                out.append(int(x))
+            except (TypeError, ValueError):
+                continue
     except json.JSONDecodeError as e:
         logger.error(
             "auth.json повреждён и не может быть прочитан: %s. "
             "Все пользователи будут разлогинены до восстановления файла.",
             e,
         )
+        _auth_ids_cache = tuple()
+        _auth_cache_mtime = mtime
         return []
+
+    _auth_ids_cache = tuple(out)
+    _auth_cache_mtime = mtime
+    return list(out)
 
 
 def _save_auth(chat_ids: list[int]) -> None:
@@ -203,9 +293,18 @@ def _save_auth(chat_ids: list[int]) -> None:
     :type chat_ids: list[int]
     :returns: None
     """
-    os.makedirs(config.STORAGE_DIR, exist_ok=True)
-    with open(config.AUTH_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump({"authorized": chat_ids}, f)
+    global _auth_ids_cache, _auth_cache_mtime
+
+    atomic_write_json(
+        config.AUTH_JSON_PATH,
+        {"authorized": chat_ids},
+        ensure_ascii=True,
+    )
+    _auth_ids_cache = tuple(chat_ids)
+    try:
+        _auth_cache_mtime = os.path.getmtime(config.AUTH_JSON_PATH)
+    except OSError:
+        _auth_cache_mtime = None
 
 
 def is_authorized(chat_id: int) -> bool:
@@ -264,14 +363,10 @@ def get_last_check_date() -> Optional[str]:
     >>> get_last_check_date()
     '2026-03-13'
     """
-    if not os.path.exists(config.META_JSON_PATH):
+    meta = read_meta_json()
+    if meta is None:
         return None
-    try:
-        with open(config.META_JSON_PATH, "r", encoding="utf-8") as f:
-            return json.load(f).get("last_check_date")
-    except json.JSONDecodeError as e:
-        logger.error("meta.json повреждён (get_last_check_date): %s", e)
-        return None
+    return meta.get("last_check_date")
 
 
 def set_last_check_date(date_str: str) -> None:
@@ -292,16 +387,11 @@ def set_last_check_date(date_str: str) -> None:
     """
     os.makedirs(config.STORAGE_DIR, exist_ok=True)
     meta: dict = {}
-    if os.path.exists(config.META_JSON_PATH):
-        try:
-            with open(config.META_JSON_PATH, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-        except json.JSONDecodeError as e:
-            logger.error("meta.json повреждён (set_last_check_date): %s", e)
-            meta = {}
+    existing = read_meta_json()
+    if existing is not None:
+        meta = dict(existing)
     meta["last_check_date"] = date_str
-    with open(config.META_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    atomic_write_json(config.META_JSON_PATH, meta, ensure_ascii=False, indent=2)
     logger.debug("last_check_date обновлён: %s", date_str)
 
 
@@ -317,14 +407,8 @@ def get_status_text() -> str:
     >>> print(get_status_text())
     Актуально на 09.03.2026, загружено 12.03.2026 в 18:05
     """
-    if not os.path.exists(config.META_JSON_PATH):
-        return "Данные ещё не загружены"
-
-    try:
-        with open(config.META_JSON_PATH, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-    except json.JSONDecodeError as e:
-        logger.error("meta.json повреждён (get_status_text): %s", e)
+    meta = read_meta_json()
+    if meta is None:
         return "Данные ещё не загружены"
 
     email_date_str = meta.get("email_date", "")

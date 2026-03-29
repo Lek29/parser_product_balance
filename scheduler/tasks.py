@@ -5,6 +5,9 @@
 получения и обработки остатков с корпоративной почты.
 
 Расписание: каждый понедельник в 09:00 по московскому времени.
+
+Частичная выгрузка (``filtered_partial.xlsx``) планировщиком **не** создаётся:
+пишется только глобальный ``filtered.xlsx`` (см. :func:`fetch_and_parse`).
 """
 
 import logging
@@ -24,41 +27,47 @@ def fetch_and_parse() -> None:
     2. Если данные уже актуальны — завершает без изменений.
     3. Парсит скачанный xlsx, строит список всех товарных позиций.
     4. Сохраняет полный список в storage/data.json.
-    5. Генерирует отфильтрованный storage/filtered.xlsx.
+    5. Генерирует глобальный отфильтрованный файл (``config.FILTERED_XLSX_PATH``).
+
+    Файл частичной фильтрации (``FILTERED_PARTIAL_XLSX_PATH``) не затрагивается.
 
     :returns: None
     :side effects: Обновляет файлы storage/current.xlsx, storage/meta.json,
-                   storage/data.json, storage/filtered.xlsx.
+                   storage/data.json, глобальный filtered.xlsx.
     """
     logger.info("Планировщик: запуск задачи fetch_and_parse.")
 
     try:
-        from parser.mail_fetcher import fetch_and_save
-        updated = fetch_and_save()
+        from parser.mail_fetcher import MailFetchOutcome, fetch_and_save
 
-        if updated is None:
+        outcome = fetch_and_save()
+
+        if outcome == MailFetchOutcome.SKIPPED_TODAY:
             logger.info(
                 "Планировщик: IMAP пропущен — почта уже проверялась сегодня."
             )
             return
 
-        if updated is False:
+        if outcome == MailFetchOutcome.NO_CHANGES:
             logger.info("Планировщик: IMAP проверен, новых писем нет.")
             return
 
-        from parser.excel_parser import parse_stock, filter_by_threshold, generate_filtered_xlsx
-        from storage.data_store import save_items
+        if outcome == MailFetchOutcome.ARCHIVE_FAILURE:
+            logger.error(
+                "Планировщик: MAIL_FETCH_ARCHIVE_FAILURE — скачивание или "
+                "распаковка архива не удались; парсинг не выполняется."
+            )
+            return
 
-        all_items = parse_stock()
-        save_items(all_items)
+        from services.stock_pipeline import run_parse_and_save_filtered
 
-        filtered = filter_by_threshold(all_items)
-        generate_filtered_xlsx(filtered)
+        all_count, filtered_count = run_parse_and_save_filtered()
 
         logger.info(
-            "Планировщик: обновление завершено. Всего позиций: %d, с малым остатком: %d.",
-            len(all_items),
-            len(filtered),
+            "Планировщик: обновление завершено. Всего позиций: %d, "
+            "с малым остатком: %d. (Частичный filtered_partial не пишется.)",
+            all_count,
+            filtered_count,
         )
 
     except Exception as e:
