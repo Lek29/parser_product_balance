@@ -32,6 +32,10 @@ def _require(key: str) -> str:
 EMAIL_ADDRESS: str = _require("EMAIL_ADDRESS")
 EMAIL_PASSWORD: str = _require("EMAIL_PASSWORD")
 EMAIL_IMAP_SERVER: str = _require("EMAIL_IMAP_SERVER")
+# Префикс имени вложения с остатками (без учёта регистра при сопоставлении в коде).
+MAIL_STOCK_ARCHIVE_PREFIX: str = os.getenv(
+    "MAIL_STOCK_ARCHIVE_PREFIX", "Остатки от "
+)
 
 # --- Telegram ---
 TELEGRAM_BOT_TOKEN: str = _require("TELEGRAM_BOT_TOKEN")

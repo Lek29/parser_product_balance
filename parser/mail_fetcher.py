@@ -1,8 +1,11 @@
 """
 Модуль получения Excel-остатков с корпоративной почты.
 
-Подключается к почтовому серверу Яндекс по IMAP SSL, ищет последнее письмо
-с вложением-архивом (.zip или .rar), скачивает его в папку temp/,
+Подключается к почтовому серверу Яндекс по IMAP SSL, собирает вложения-архивы
+(.zip или .rar) с именем по префиксу ``MAIL_STOCK_ARCHIVE_PREFIX`` (по умолчанию
+«Остатки от »), выбирает один архив с максимальной датой в имени файла
+(при неоднозначности — более новое письмо по заголовку Date), скачивает его
+в папку temp/,
 распаковывает и сохраняет найденный .xlsx файл в storage/current.xlsx.
 Метаданные (дата письма, имя файла) сохраняются в storage/meta.json.
 """
@@ -13,16 +16,46 @@ import imaplib
 import json
 import logging
 import os
+import re
 import shutil
 import zipfile
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime
 from email.header import decode_header
+from email.utils import parsedate_to_datetime
 from enum import Enum
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import config
 
 logger = logging.getLogger(__name__)
+
+# Дата сразу после префикса: только DD.MM.YYYY или YYYY-MM-DD (без угадывания локали).
+_RE_STOCK_FILENAME_DDMMYYYY = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4})")
+_RE_STOCK_FILENAME_ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+
+
+@dataclass(frozen=True)
+class _StockArchiveCandidate:
+    """
+    Вложение-архив остатков и ключи выбора «лучшего» среди писем INBOX.
+
+    :ivar msg: Полное RFC822-сообщение (для скачивания вложения).
+    :ivar filename: Декодированное имя файла.
+    :ivar email_date: Значение заголовка ``Date``.
+    :ivar msg_id: Идентификатор письма IMAP (байты), для разрешения ничьих.
+    :ivar stock_date: Дата ранжирования (из имени или fallback на дату письма).
+    :ivar parsed_filename_date: Дата из имени или ``None``, если использован fallback.
+    :ivar email_dt: Разобранный ``Date`` для сравнения писем с одной и той же stock_date.
+    """
+
+    msg: email.message.Message
+    filename: str
+    email_date: str
+    msg_id: bytes
+    stock_date: date
+    parsed_filename_date: Optional[date]
+    email_dt: datetime
 
 
 class MailFetchOutcome(str, Enum):
@@ -68,6 +101,186 @@ def _decode_mime_words(text: str) -> str:
     return "".join(decoded)
 
 
+def _stem_and_ext(filename: str) -> Tuple[str, str]:
+    """
+    Делит имя файла на основу и расширение (расширение в нижнем регистре).
+
+    :param filename: Имя файла вложения.
+    :type filename: str
+    :returns: Пара (stem, ext), например (``\"Остатки от 1.1.2026\"``, ``\".zip\"``).
+    :rtype: Tuple[str, str]
+    """
+    base, ext = os.path.splitext(filename)
+    return base, ext.lower()
+
+
+def _is_archive_extension(ext: str) -> bool:
+    """
+    Проверяет, что расширение — поддерживаемый архив.
+
+    :param ext: Расширение с точкой, в нижнем регистре.
+    :type ext: str
+    :returns: ``True`` для ``.zip`` / ``.rar``.
+    :rtype: bool
+    """
+    return ext in (".zip", ".rar")
+
+
+def _parse_email_date_for_sort(date_header: str) -> datetime:
+    """
+    Парсит заголовок ``Date`` для сравнения «какое письмо новее».
+
+    При ошибке или пустой строке возвращает ``datetime.min`` (наивный), чтобы
+    такие письма уходили в конец при прочих равных.
+
+    :param date_header: Сырая строка заголовка.
+    :type date_header: str
+    :returns: Нормализованный наивный локальный ``datetime`` или ``datetime.min``.
+    :rtype: datetime
+    """
+    if not date_header:
+        return datetime.min.replace(tzinfo=None)
+    try:
+        dt = parsedate_to_datetime(date_header)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt
+    except (TypeError, ValueError, OverflowError):
+        return datetime.min.replace(tzinfo=None)
+
+
+def _msg_id_numeric(msg_id: bytes) -> int:
+    """
+    Числовой UID/msg id для устойчивого сравнения при равных датах.
+
+    :param msg_id: Идентификатор из ответа ``imap.search``.
+    :type msg_id: bytes
+    :returns: Целое или 0, если не удалось распарсить.
+    :rtype: int
+    """
+    try:
+        return int(msg_id.decode("ascii", errors="ignore"))
+    except ValueError:
+        return 0
+
+
+def _filename_has_stock_prefix(filename: str) -> bool:
+    """
+    Проверяет, что нормализованное имя (stem) начинается с префикса остатков.
+
+    Сравнение префикса без учёта регистра (``casefold``).
+
+    :param filename: Полное имя файла вложения.
+    :type filename: str
+    :returns: ``True``, если stem начинается с ``config.MAIL_STOCK_ARCHIVE_PREFIX``.
+    :rtype: bool
+    """
+    stem, _ = _stem_and_ext(filename)
+    prefix = config.MAIL_STOCK_ARCHIVE_PREFIX
+    if len(stem) < len(prefix):
+        return False
+    return stem[: len(prefix)].casefold() == prefix.casefold()
+
+
+def _parse_date_after_stock_prefix(filename: str) -> Optional[date]:
+    """
+    Извлекает дату из имени файла сразу после префикса «Остатки от ».
+
+    Допустимы только форматы ``DD.MM.YYYY`` и ``YYYY-MM-DD`` в начале хвоста
+    (после префикса допускаются пробелы).
+
+    :param filename: Имя вложения после MIME-декодирования.
+    :type filename: str
+    :returns: Дата или ``None``, если префикс/формат не подошли.
+    :rtype: Optional[date]
+    """
+    stem, _ = _stem_and_ext(filename)
+    prefix = config.MAIL_STOCK_ARCHIVE_PREFIX
+    if len(stem) < len(prefix):
+        return None
+    if stem[: len(prefix)].casefold() != prefix.casefold():
+        return None
+    rest = stem[len(prefix) :].strip()
+    m = _RE_STOCK_FILENAME_DDMMYYYY.match(rest)
+    if m:
+        dd, mm, yyyy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return date(yyyy, mm, dd)
+        except ValueError:
+            return None
+    m = _RE_STOCK_FILENAME_ISO.match(rest)
+    if m:
+        yyyy, mm, dd = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return date(yyyy, mm, dd)
+        except ValueError:
+            return None
+    return None
+
+
+def _effective_stock_date(
+    filename: str,
+    email_date_header: str,
+) -> Optional[Tuple[date, Optional[date]]]:
+    """
+    Возвращает дату для ранжирования кандидата и факт распознавания даты в имени.
+
+    Если дата в имени не найдена, используется календарная дата из заголовка
+    ``Date`` (с предупреждением в логе). Если и она недоступна — кандидат
+    отбрасывается (``None``).
+
+    :param filename: Имя архива.
+    :type filename: str
+    :param email_date_header: Заголовок ``Date`` письма.
+    :type email_date_header: str
+    :returns: ``(stock_date, parsed_filename_date)`` или ``None``.
+    :rtype: Optional[Tuple[date, Optional[date]]]
+    """
+    parsed = _parse_date_after_stock_prefix(filename)
+    if parsed is not None:
+        return parsed, parsed
+    edt = _parse_email_date_for_sort(email_date_header)
+    if edt == datetime.min.replace(tzinfo=None):
+        logger.warning(
+            "Архив отброшен (нет даты в имени DD.MM.YYYY/YYYY-MM-DD и нет валидного Date): %s",
+            filename,
+        )
+        return None
+    logger.warning(
+        "Дата в имени архива не распознана, для сортировки используется дата письма: %s",
+        filename,
+    )
+    return edt.date(), None
+
+
+def _pick_best_stock_candidate(
+    candidates: List[_StockArchiveCandidate],
+) -> Optional[_StockArchiveCandidate]:
+    """
+    Выбирает кандидата с максимальной ``stock_date``.
+
+    При равенстве: более новое письмо (``email_dt``), затем больший IMAP ``msg_id``,
+    затем лексикографически большее имя файла (детерминированно при нескольких
+    вложениях в одном письме).
+
+    :param candidates: Непустой или пустой список кандидатов.
+    :type candidates: List[_StockArchiveCandidate]
+    :returns: Лучший кандидат или ``None``, если список пуст.
+    :rtype: Optional[_StockArchiveCandidate]
+    """
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda c: (
+            c.stock_date,
+            c.email_dt,
+            _msg_id_numeric(c.msg_id),
+            c.filename,
+        ),
+    )
+
+
 def _connect_imap() -> imaplib.IMAP4_SSL:
     """
     Устанавливает IMAP SSL соединение с почтовым сервером и выполняет авторизацию.
@@ -87,24 +300,33 @@ def _find_latest_archive_attachment(
     imap: imaplib.IMAP4_SSL,
 ) -> Tuple[Optional[email.message.Message], Optional[str], Optional[str]]:
     """
-    Ищет в папке INBOX последнее письмо с вложением-архивом (.zip или .rar).
+    Ищет в INBOX одно вложение — архив остатков (.zip / .rar) с подходящим именем.
+
+    Учитываются только файлы, у которых основа имени начинается с
+    :data:`config.MAIL_STOCK_ARCHIVE_PREFIX` (сравнение без учёта регистра).
+    Из всех таких вложений по всем письмам выбирается архив с максимальной датой
+    в имени (форматы ``DD.MM.YYYY`` или ``YYYY-MM-DD`` сразу после префикса).
+    Если дату из имени извлечь нельзя, для сортировки используется дата из
+    заголовка ``Date`` (с предупреждением в логе); при невалидном ``Date``
+    кандидат отбрасывается.
+
+    При равной эффективной дате выбирается более новое письмо по ``Date``, затем
+    больший IMAP ``msg_id``, затем лексикографически большее имя файла.
 
     .. note:: Технический долг (см. ``docs/refactoring-plan2.md`` §B.6): при очень
        большом INBOX полный перебор ID может быть медленным. Возможные меры
        (после замеров): ограничение глубины, отдельная папка, UID SEARCH по дате.
 
-    Использует двухфазный поиск для минимизации трафика при большом inbox:
+    Двухфазный обход (трафик):
 
-    - Фаза 1: загружает только заголовки каждого письма (BODY.PEEK[HEADER],
-      ~2-5 КБ). Письма без Content-Type: multipart/* пропускаются мгновенно —
-      вложений в них быть не может.
-    - Фаза 2: только для multipart-писем загружает полный RFC822 и проверяет
-      наличие .zip/.rar вложения.
+    - Фаза 1: ``BODY.PEEK[HEADER]`` — отсев не-multipart.
+    - Фаза 2: ``RFC822`` для multipart — сбор всех кандидатов с подходящим именем.
 
     :param imap: Авторизованный IMAP объект.
     :type imap: imaplib.IMAP4_SSL
-    :returns: Кортеж (email-сообщение, имя файла вложения, дата письма).
-              Все элементы None если подходящее письмо не найдено.
+    :returns: Кортеж (сообщение, имя архива, заголовок Date выбранного письма).
+              Все ``None``, если подходящих вложений нет (результат для
+              :func:`fetch_and_save` — ``NO_CHANGES``, без подмены чужим архивом).
     :rtype: Tuple[Optional[email.message.Message], Optional[str], Optional[str]]
     """
     imap.select("INBOX")
@@ -116,9 +338,12 @@ def _find_latest_archive_attachment(
         return None, None, None
 
     logger.info(
-        "Найдено писем в INBOX: %d. Ищем последнее с архивом...",
+        "Найдено писем в INBOX: %d. Сбор архивов остатков (префикс «%s»)...",
         len(msg_ids),
+        config.MAIL_STOCK_ARCHIVE_PREFIX.strip(),
     )
+
+    candidates: List[_StockArchiveCandidate] = []
 
     for msg_id in reversed(msg_ids):
         # Фаза 1: загружаем только заголовки — дёшево (~2-5 КБ на письмо)
@@ -140,6 +365,7 @@ def _find_latest_archive_attachment(
 
         msg = email.message_from_bytes(msg_data[0][1])
         date_str = msg.get("Date", "")
+        email_dt = _parse_email_date_for_sort(date_str)
 
         for part in msg.walk():
             content_disposition = part.get("Content-Disposition", "")
@@ -151,16 +377,64 @@ def _find_latest_archive_attachment(
                 continue
 
             filename = _decode_mime_words(raw_filename)
-
-            if filename.lower().endswith(".zip") or filename.lower().endswith(".rar"):
+            _stem, ext = _stem_and_ext(filename)
+            if not _is_archive_extension(ext):
+                continue
+            if not _filename_has_stock_prefix(filename):
                 logger.info(
-                    "Найдено письмо с архивом: '%s' от %s",
-                    filename, date_str,
+                    "Архив отброшен (имя не по префиксу «%s»): %s",
+                    config.MAIL_STOCK_ARCHIVE_PREFIX.strip(),
+                    filename,
                 )
-                return msg, filename, date_str
+                continue
 
-    logger.warning("Писем с вложением-архивом не найдено.")
-    return None, None, None
+            eff = _effective_stock_date(filename, date_str)
+            if eff is None:
+                continue
+            stock_date, parsed_fn = eff
+            candidates.append(
+                _StockArchiveCandidate(
+                    msg=msg,
+                    filename=filename,
+                    email_date=date_str,
+                    msg_id=msg_id,
+                    stock_date=stock_date,
+                    parsed_filename_date=parsed_fn,
+                    email_dt=email_dt,
+                )
+            )
+            src = "имя" if parsed_fn is not None else "письмо"
+            logger.info(
+                "Кандидат архива остатков: %s, эффективная дата %s (%s), письмо Date=%s",
+                filename,
+                stock_date.isoformat(),
+                src,
+                date_str,
+            )
+
+    if not candidates:
+        logger.warning(
+            "Подходящих архивов остатков не найдено (префикс «%s», только .zip/.rar).",
+            config.MAIL_STOCK_ARCHIVE_PREFIX.strip(),
+        )
+        return None, None, None
+
+    best = _pick_best_stock_candidate(candidates)
+    if best is None:
+        return None, None, None
+    parsed_label = (
+        best.parsed_filename_date.isoformat()
+        if best.parsed_filename_date is not None
+        else "fallback: дата письма"
+    )
+    logger.info(
+        "Выбран архив остатков: %s (эффективная дата %s; разбор имени: %s). Всего кандидатов: %d",
+        best.filename,
+        best.stock_date.isoformat(),
+        parsed_label,
+        len(candidates),
+    )
+    return best.msg, best.filename, best.email_date
 
 
 def _download_archive(
@@ -294,7 +568,8 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
 
     Возвращает :class:`MailFetchOutcome` (явная модель вместо ``Optional[bool]``):
     - ``UPDATED`` — данные успешно обновлены (новое письмо скачано и сохранено)
-    - ``NO_CHANGES`` — IMAP проверен, нового письма нет или дата не новее сохранённой
+    - ``NO_CHANGES`` — IMAP проверен, нет архива с префиксом остатков в имени, либо
+      дата выбранного письма не новее сохранённой в ``meta.json``
     - ``SKIPPED_TODAY`` — IMAP не вызывался, т.к. сегодня уже была проверка (``force=False``)
     - ``ARCHIVE_FAILURE`` — не удалось скачать вложение или извлечь .xlsx из архива
 
