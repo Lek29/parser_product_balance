@@ -150,6 +150,9 @@ pytest tests/
 docker compose up -d --build
 ```
 
+Лимиты ресурсов (CPU/память) заданы так, чтобы работали в обычном `docker compose up`
+(а также продублированы в `deploy.resources` для Swarm).
+
 Часовой пояс контейнера: `Europe/Moscow` (совпадает с планировщиком APScheduler).  
 Данные из `storage/` и `temp/` монтируются как volumes — сохраняются между перезапусками.  
 Сборка использует `.dockerignore` (в образ не попадают тесты, `.git`, `.env` и т.д.).
