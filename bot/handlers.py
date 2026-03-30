@@ -24,6 +24,7 @@ import time
 
 from telegram import Message, Update
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -68,6 +69,29 @@ from bot.partial_filter_state import (
 from storage.data_store import authorize, get_status_text, is_authorized
 
 logger = logging.getLogger(__name__)
+
+
+async def _edit_callback_message_safe(query, text: str, **kwargs: object) -> None:
+    """
+    Вызывает ``edit_message_text`` для callback; не падает, если текст и разметка совпадают
+    с текущими (ответ Telegram «Message is not modified»).
+
+    :param query: Объект CallbackQuery.
+    :type query: telegram.CallbackQuery
+    :param text: Новый текст сообщения.
+    :type text: str
+    :param kwargs: Аргументы для ``edit_message_text`` (parse_mode, reply_markup и т.д.).
+    :type kwargs: object
+    :returns: None
+    """
+    try:
+        await query.edit_message_text(text, **kwargs)
+    except BadRequest as e:
+        msg = (getattr(e, "message", None) or str(e)).lower()
+        if "message is not modified" in msg:
+            logger.debug("edit_message_text: содержимое не изменилось, пропуск.")
+            return
+        raise
 
 # CommandHandler по умолчанию использует только UpdateType.MESSAGES (message / edited_message).
 # В Telegram Business команды приходят в business_message — без этого OR хэндлер не вызывается.
@@ -569,11 +593,12 @@ async def cb_partial_start(
     await query.answer()
 
     if not _check_auth(query.message.chat_id):
-        await query.edit_message_text(_NOT_AUTH_TEXT)
+        await _edit_callback_message_safe(query, _NOT_AUTH_TEXT)
         return
 
     if not os.path.isfile(config.CURRENT_XLSX_PATH):
-        await query.edit_message_text(
+        await _edit_callback_message_safe(
+            query,
             "📭 Нет файла остатков.\n\n"
             "Сначала нажмите «Актуализировать остатки».",
             reply_markup=main_keyboard(),
@@ -586,14 +611,16 @@ async def cb_partial_start(
         groups = list_product_groups()
     except Exception as e:
         logger.error("Частичная фильтрация: ошибка списка групп: %s", e, exc_info=True)
-        await query.edit_message_text(
+        await _edit_callback_message_safe(
+            query,
             "❌ Не удалось прочитать таблицу остатков.\n\nПопробуйте позже.",
             reply_markup=main_keyboard(),
         )
         return
 
     if not groups:
-        await query.edit_message_text(
+        await _edit_callback_message_safe(
+            query,
             "📭 В файле нет товарных групп для фильтра.\n\n"
             "Актуализируйте остатки.",
             reply_markup=main_keyboard(),
@@ -601,7 +628,8 @@ async def cb_partial_start(
         return
 
     init_partial_session(context, groups)
-    await query.edit_message_text(
+    await _edit_callback_message_safe(
+        query,
         "🔀 *Частичная фильтрация*\n\n"
         "Ниже появятся кнопки групп. Выберите группу — затем порог "
         "в сообщении с кнопками. Можно настроить несколько групп и "

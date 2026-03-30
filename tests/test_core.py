@@ -9,11 +9,14 @@ from pathlib import Path
 
 import openpyxl
 import pytest
+from openpyxl.styles import Alignment
 
 from parser.excel_parser import (
+    HEADER_ROWS,
     TOP_CATEGORY_FALLBACK_LABEL,
     filter_by_group_thresholds,
     generate_filtered_xlsx,
+    parse_stock,
 )
 
 
@@ -173,3 +176,27 @@ def test_read_meta_json_unifies_status_fields(
     assert m.get("email_date") == payload["email_date"]
     assert get_last_email_date_str() == payload["email_date"]
     assert "01.01.2026" in get_status_text()
+
+
+def test_parse_stock_always_reads_columns_a_through_e(tmp_path: Path) -> None:
+    """
+    Строки, где в файле заполнена только A (категория), не должны давать IndexError
+    при обращении к D/E — iter_rows с max_col=5 отдаёт пустые ячейки.
+    """
+    path = tmp_path / "stock.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    r_cat = HEADER_ROWS + 1
+    cat_cell = ws.cell(row=r_cat, column=1, value="Верх")
+    cat_cell.alignment = Alignment(indent=4)
+    r_item = r_cat + 1
+    item_cell = ws.cell(row=r_item, column=1, value="Товар 1")
+    item_cell.alignment = Alignment(indent=10)
+    ws.cell(row=r_item, column=4, value=2)
+    ws.cell(row=r_item, column=5, value=50)
+    wb.save(path)
+
+    items = parse_stock(str(path))
+    assert len(items) == 1
+    assert items[0]["name"] == "Товар 1"
+    assert items[0]["quantity"] == 2

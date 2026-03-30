@@ -49,6 +49,11 @@ INDENT_TO_LEVEL = {
 # Имя группы для позиций без категории верхнего уровня (пустой top_category после parse_stock).
 TOP_CATEGORY_FALLBACK_LABEL: str = "Без группы"
 
+# Читаем фиксированный диапазон A..E: кол-во в D, цена в E. Без max_col у «узких» строк
+# iter_rows отдаёт кортеж короче индексов 3/4 → IndexError на части выгрузок с почты.
+_STOCK_SHEET_MIN_COL: int = 1
+_STOCK_SHEET_MAX_COL: int = 5
+
 
 def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
     """
@@ -65,6 +70,9 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
     :rtype: list[dict]
     :raises FileNotFoundError: Если файл не найден.
     :raises openpyxl.utils.exceptions.InvalidFileException: Если файл повреждён.
+
+    Для каждой строки данных запрашиваются колонки A–E (см. константы диапазона),
+    чтобы пустые хвосты строк не сокращали кортеж ``row`` ниже индексов колонок D/E.
 
     :example:
     >>> items = parse_stock()
@@ -84,10 +92,17 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
     context: dict[float, str] = {}
     items = []
 
-    for row_idx, row in enumerate(ws.iter_rows(min_row=HEADER_ROWS + 1), start=HEADER_ROWS + 1):
+    for row_idx, row in enumerate(
+        ws.iter_rows(
+            min_row=HEADER_ROWS + 1,
+            min_col=_STOCK_SHEET_MIN_COL,
+            max_col=_STOCK_SHEET_MAX_COL,
+        ),
+        start=HEADER_ROWS + 1,
+    ):
         cell_name = row[0]  # колонка A
         cell_qty = row[3]   # колонка D
-        cell_price = row[4] # колонка E
+        cell_price = row[4]  # колонка E
 
         name = cell_name.value
         if name is None:
