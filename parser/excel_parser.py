@@ -6,7 +6,8 @@
 Список групп — :func:`list_product_groups`; частичный отбор —
 :func:`filter_by_group_thresholds`; отдельный файл частичной выгрузки —
 :func:`generate_filtered_partial_xlsx`. Глобальный отфильтрованный .xlsx —
-:func:`generate_filtered_xlsx`.
+:func:`generate_filtered_xlsx`. Пороги по группам (роль fourty_role) —
+:func:`find_group_limit_violations`.
 
 Структура иерархии по indent:
     indent 4  — категория верхнего уровня (Аксессуары, Мячи)
@@ -22,7 +23,7 @@ import logging
 import math
 import os
 from itertools import groupby
-from typing import Optional
+from typing import Any, Optional
 
 import openpyxl
 from openpyxl import Workbook
@@ -269,6 +270,88 @@ def filter_by_group_thresholds(
         len(result),
     )
     return result
+
+
+def find_group_limit_violations(
+    items: list[dict],
+    limits_by_group: dict[str, int],
+) -> list[dict[str, Any]]:
+    """
+    Находит позиции с остатком не выше лимита для каждой группы из словаря лимитов.
+
+    Используется для уведомлений о порогах по товарной группе (см. ``docs/fourty_role.md``):
+    для каждой группы с заданным лимитом перечисляются только те SKU (строки
+    с indent 10/12 из :func:`parse_stock`), у которых ``quantity <= лимит``.
+
+    Ключи групп нормализуются через :func:`normalize_top_category_label`, как
+    в :func:`filter_by_group_thresholds`.
+
+    :param items: Полный список позиций (результат :func:`parse_stock`).
+    :type items: list[dict]
+    :param limits_by_group: Имя группы → лимит включительно (как в хранилище лимитов).
+    :type limits_by_group: dict[str, int]
+    :returns: Список словарей вида ``{"group", "limit", "positions"}``, только
+              для групп, где есть хотя бы одна позиция с ``quantity <= лимит``.
+              В ``positions`` — ``{"name", "quantity"}``, отсортировано по имени.
+    :rtype: list[dict[str, Any]]
+    :side effects: Пишет в лог.
+
+    :example:
+    >>> items = [
+    ...     {"top_category": "Велосипеды", "name": "A", "quantity": 2},
+    ...     {"top_category": "Велосипеды", "name": "B", "quantity": 10},
+    ... ]
+    >>> find_group_limit_violations(items, {"Велосипеды": 5})
+    [{'group': 'Велосипеды', 'limit': 5, 'positions': [{'name': 'A', 'quantity': 2}]}]
+    """
+    if not limits_by_group:
+        logger.info("Пороги по группам: словарь лимитов пуст — срабатываний нет.")
+        return []
+
+    normalized_limits: dict[str, int] = {}
+    for raw_key, raw_limit in limits_by_group.items():
+        group_key = normalize_top_category_label(str(raw_key))
+        try:
+            limit_val = int(raw_limit)
+        except (TypeError, ValueError):
+            continue
+        if limit_val < 0:
+            continue
+        normalized_limits[group_key] = limit_val
+
+    if not normalized_limits:
+        logger.info("Пороги по группам: после нормализации лимитов не осталось.")
+        return []
+
+    out: list[dict[str, Any]] = []
+    for group in sorted(normalized_limits.keys(), key=lambda s: s.casefold()):
+        limit = normalized_limits[group]
+        positions: list[dict[str, Any]] = []
+        for item in items:
+            item_group = normalize_top_category_label(item.get("top_category", ""))
+            if item_group != group:
+                continue
+            qty = item.get("quantity")
+            if qty is None:
+                continue
+            try:
+                qty_int = int(qty)
+            except (TypeError, ValueError):
+                continue
+            if qty_int <= limit:
+                positions.append({"name": item.get("name", ""), "quantity": qty_int})
+        positions.sort(key=lambda p: str(p.get("name", "")).casefold())
+        if positions:
+            out.append({"group": group, "limit": limit, "positions": positions})
+
+    total_positions = sum(len(v["positions"]) for v in out)
+    logger.info(
+        "Пороги по группам: групп с нарушениями %d, позиций %d (лимитов в правилах %d).",
+        len(out),
+        total_positions,
+        len(normalized_limits),
+    )
+    return out
 
 
 def get_filtered_items(threshold: Optional[int] = None) -> list[dict]:

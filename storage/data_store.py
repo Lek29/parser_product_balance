@@ -15,6 +15,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Optional
 
 import config
+from parser.excel_parser import normalize_top_category_label
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +306,194 @@ def _save_auth(chat_ids: list[int]) -> None:
         _auth_cache_mtime = os.path.getmtime(config.AUTH_JSON_PATH)
     except OSError:
         _auth_cache_mtime = None
+
+
+def _load_group_stock_limits() -> dict[str, int]:
+    """
+    Читает словарь лимитов по товарным группам из
+    ``storage/group_stock_limits.json``.
+
+    Ключи нормализуются через
+    :func:`parser.excel_parser.normalize_top_category_label`, чтобы формат
+    совпадал с UI и частичной фильтрацией. Повреждённый JSON, несловарный
+    корень и невалидные значения лимитов трактуются мягко: пропускаются
+    или дают пустой словарь без падения процесса.
+
+    :returns: Словарь ``имя_группы -> лимит`` только с целыми значениями
+              ``>= 0``.
+    :rtype: dict[str, int]
+
+    :example:
+    >>> _load_group_stock_limits()
+    {'Велосипеды': 3, 'Без группы': 0}
+    """
+    path = config.GROUP_STOCK_LIMITS_JSON_PATH
+    if not os.path.exists(path):
+        return {}
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except json.JSONDecodeError as e:
+        logger.error(
+            "group_stock_limits.json повреждён и не может быть прочитан: %s. "
+            "Возвращаем пустой словарь лимитов.",
+            e,
+        )
+        return {}
+
+    if not isinstance(raw, dict):
+        return {}
+
+    limits_raw = raw.get("limits", raw)
+    if not isinstance(limits_raw, dict):
+        return {}
+
+    out: dict[str, int] = {}
+    for raw_group, raw_limit in limits_raw.items():
+        try:
+            group = normalize_top_category_label(str(raw_group))
+            limit = int(raw_limit)
+        except (TypeError, ValueError):
+            continue
+        if limit < 0:
+            continue
+        out[group] = limit
+    return out
+
+
+def _save_group_stock_limits(limits_by_group: dict[str, int]) -> None:
+    """
+    Сохраняет словарь лимитов по товарным группам в
+    ``storage/group_stock_limits.json``.
+
+    Перед записью повторно нормализует ключи групп и отбрасывает
+    невалидные значения, чтобы файл содержал только безопасные
+    для рантайма данные.
+
+    :param limits_by_group: Словарь ``имя_группы -> лимит``.
+    :type limits_by_group: dict[str, int]
+    :returns: None
+    :raises ValueError: Если один из лимитов меньше нуля.
+    :side effects: Атомарно перезаписывает
+                   ``storage/group_stock_limits.json``.
+
+    :example:
+    >>> _save_group_stock_limits({' Велосипеды ': 5})
+    """
+    normalized_limits: dict[str, int] = {}
+    for raw_group, raw_limit in limits_by_group.items():
+        group = normalize_top_category_label(str(raw_group))
+        limit = int(raw_limit)
+        if limit < 0:
+            raise ValueError(
+                f"Лимит для группы {group!r} не может быть отрицательным."
+            )
+        normalized_limits[group] = limit
+
+    payload = {
+        "updated_at": datetime.now().isoformat(),
+        "count": len(normalized_limits),
+        "limits": normalized_limits,
+    }
+    atomic_write_json(
+        config.GROUP_STOCK_LIMITS_JSON_PATH,
+        payload,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def list_all_limits() -> dict[str, int]:
+    """
+    Возвращает все активные лимиты по товарным группам.
+
+    Это и есть реестр «постоянного надзора»: отдельный список не хранится,
+    под наблюдением находятся все группы, присутствующие в словаре лимитов.
+
+    :returns: Словарь ``имя_группы -> лимит``.
+    :rtype: dict[str, int]
+
+    :example:
+    >>> list_all_limits()
+    {'Велосипеды': 3}
+    """
+    return _load_group_stock_limits()
+
+
+def get_limit(group_key: str) -> Optional[int]:
+    """
+    Возвращает лимит для одной товарной группы.
+
+    Входное имя группы нормализуется тем же способом, что и ключи
+    в UI бота, поэтому запросы вида ``" Велосипеды "`` и
+    ``"Велосипеды"`` эквивалентны.
+
+    :param group_key: Имя товарной группы.
+    :type group_key: str
+    :returns: Лимит группы или ``None``, если лимит не задан.
+    :rtype: Optional[int]
+
+    :example:
+    >>> get_limit("Велосипеды")
+    3
+    """
+    normalized_group = normalize_top_category_label(group_key)
+    return _load_group_stock_limits().get(normalized_group)
+
+
+def set_limit(group_key: str, value: int) -> None:
+    """
+    Устанавливает или обновляет лимит для товарной группы.
+
+    Лимит сохраняется между перезапусками приложения. Значение должно быть
+    целым числом ``>= 0``; отрицательные значения отклоняются исключением.
+
+    :param group_key: Имя товарной группы.
+    :type group_key: str
+    :param value: Новый лимит группы.
+    :type value: int
+    :returns: None
+    :raises ValueError: Если ``value`` меньше нуля.
+    :side effects: Обновляет ``storage/group_stock_limits.json``.
+
+    :example:
+    >>> set_limit("Велосипеды", 5)
+    """
+    limit = int(value)
+    if limit < 0:
+        raise ValueError("Лимит не может быть отрицательным.")
+
+    normalized_group = normalize_top_category_label(group_key)
+    limits = _load_group_stock_limits()
+    limits[normalized_group] = limit
+    _save_group_stock_limits(limits)
+    logger.info("Для группы %s установлен лимит %d.", normalized_group, limit)
+
+
+def clear_limit(group_key: str) -> None:
+    """
+    Удаляет лимит для товарной группы.
+
+    После удаления группа исчезает из словаря лимитов и автоматически считается
+    снятой с постоянного надзора. Если лимита не было, функция завершится тихо.
+
+    :param group_key: Имя товарной группы.
+    :type group_key: str
+    :returns: None
+    :side effects: Обновляет ``storage/group_stock_limits.json``.
+
+    :example:
+    >>> clear_limit("Велосипеды")
+    """
+    normalized_group = normalize_top_category_label(group_key)
+    limits = _load_group_stock_limits()
+    removed = limits.pop(normalized_group, None)
+    if removed is None:
+        logger.debug("clear_limit: для группы %s лимит не был задан.", normalized_group)
+        return
+    _save_group_stock_limits(limits)
+    logger.info("Лимит для группы %s снят.", normalized_group)
 
 
 def is_authorized(chat_id: int) -> bool:

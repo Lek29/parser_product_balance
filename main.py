@@ -13,6 +13,7 @@ from telegram.ext import Application, ContextTypes
 
 import config
 from bot.handlers import register_handlers
+from bot.telegram_bridge import register_polling_bridge
 from scheduler.tasks import create_scheduler
 
 logging.basicConfig(
@@ -47,14 +48,14 @@ async def post_init(app: Application) -> None:
     """
     Вызывается после инициализации Application перед запуском polling.
 
-    Регистрирует команды бота в меню Telegram
-    (кнопка ☰ Menu слева от поля ввода).
-    Пользователь видит список доступных команд с описаниями.
+    Регистрирует мост для алертов из фоновых потоков, затем команды бота
+    в меню Telegram (кнопка ☰ Menu слева от поля ввода).
 
     :param app: Экземпляр Application из python-telegram-bot.
     :type app: Application
     :returns: None
     """
+    register_polling_bridge(app)
     me = await app.bot.get_me()
     logger.info(
         "Telegram: бот @%s (id=%s), can_join_groups=%s",
@@ -80,6 +81,15 @@ def main() -> None:
     :returns: None
     """
     logger.info("Запуск приложения...")
+    if config.STOCK_LIMIT_ALERT_CHAT_ID is None:
+        logger.info(
+            "STOCK_LIMIT_ALERT_CHAT_ID не задан — уведомления о порогах по группам отключены.",
+        )
+    else:
+        logger.info(
+            "Уведомления о порогах по группам включены (chat_id=%s).",
+            config.STOCK_LIMIT_ALERT_CHAT_ID,
+        )
 
     scheduler = create_scheduler()
     scheduler.start()

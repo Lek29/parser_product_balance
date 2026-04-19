@@ -15,6 +15,7 @@ from parser.excel_parser import (
     HEADER_ROWS,
     TOP_CATEGORY_FALLBACK_LABEL,
     filter_by_group_thresholds,
+    find_group_limit_violations,
     generate_filtered_xlsx,
     parse_stock,
 )
@@ -48,6 +49,99 @@ def test_filter_by_group_thresholds_fallback_group() -> None:
     items = [{"top_category": "", "quantity": 1}]
     out = filter_by_group_thresholds(items, {TOP_CATEGORY_FALLBACK_LABEL: 5})
     assert len(out) == 1
+
+
+def test_find_group_limit_violations_basic() -> None:
+    """Группировка нарушений по группе; только позиции с quantity <= лимита."""
+    items = [
+        {"top_category": "Велосипеды", "name": "A", "quantity": 2},
+        {"top_category": "Велосипеды", "name": "B", "quantity": 10},
+        {"top_category": "Мячи", "name": "C", "quantity": 1},
+    ]
+    out = find_group_limit_violations(items, {"Велосипеды": 5})
+    assert len(out) == 1
+    assert out[0]["group"] == "Велосипеды"
+    assert out[0]["limit"] == 5
+    assert out[0]["positions"] == [{"name": "A", "quantity": 2}]
+
+
+def test_find_group_limit_violations_empty_limits() -> None:
+    """Пустой словарь лимитов — пустой список срабатываний."""
+    items = [{"top_category": "X", "name": "n", "quantity": 0}]
+    assert find_group_limit_violations(items, {}) == []
+
+
+def test_find_group_limit_violations_no_hits() -> None:
+    """Ни одна позиция не проходит порог — пустой результат."""
+    items = [{"top_category": "Велосипеды", "name": "B", "quantity": 10}]
+    assert find_group_limit_violations(items, {"Велосипеды": 3}) == []
+
+
+def test_parse_group_limit_callback() -> None:
+    """Разбор callback лимитов по группам (пресеты / свой / снять)."""
+    from bot.keyboards import parse_group_limit_callback
+
+    assert parse_group_limit_callback("glt:2:10") == (2, 10)
+    assert parse_group_limit_callback("glt:0:x") == (0, "custom")
+    assert parse_group_limit_callback("glt:1:c") == (1, "clear")
+    assert parse_group_limit_callback("bad") is None
+
+
+def test_format_group_limit_alerts_html_basic_and_escape() -> None:
+    """HTML-алерт: заголовок группы, список, экранирование спецсимволов."""
+    from services.group_limit_alert_text import format_group_limit_alerts_html
+
+    violations = [
+        {
+            "group": "Вело <test>",
+            "limit": 5,
+            "positions": [
+                {"name": 'SKU "A"', "quantity": 2},
+                {"name": "B", "quantity": 5},
+            ],
+        },
+    ]
+    text = format_group_limit_alerts_html(violations)
+    assert text is not None
+    assert "&lt;" in text and "&quot;" in text
+    assert "Вело" in text
+    assert "<code>5</code>" in text
+
+
+def test_format_group_limit_alerts_html_empty() -> None:
+    """Пустой вход — None."""
+    from services.group_limit_alert_text import format_group_limit_alerts_html
+
+    assert format_group_limit_alerts_html([]) is None
+    assert format_group_limit_alerts_html(
+        [{"group": "X", "limit": 1, "positions": []}],
+    ) is None
+
+
+def test_format_group_limit_alerts_html_truncates_omitted_line() -> None:
+    """При большом числе позиций — строка «и ещё N поз.»."""
+    from services.group_limit_alert_text import format_group_limit_alerts_html
+
+    positions = [{"name": f"P{i}", "quantity": 1} for i in range(80)]
+    violations = [{"group": "G", "limit": 3, "positions": positions}]
+    text = format_group_limit_alerts_html(
+        violations,
+        max_message_chars=450,
+    )
+    assert text is not None
+    assert "и ещё" in text
+
+
+def test_send_group_limit_alert_html_no_chat_no_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Без chat_id и без polling — отправка алерта не падает."""
+    import config
+
+    monkeypatch.setattr(config, "STOCK_LIMIT_ALERT_CHAT_ID", None)
+    from bot.telegram_bridge import send_group_limit_alert_html
+
+    send_group_limit_alert_html("<b>test</b>")
 
 
 def test_check_update_available_no_meta(
@@ -178,6 +272,88 @@ def test_read_meta_json_unifies_status_fields(
     assert "01.01.2026" in get_status_text()
 
 
+def test_group_stock_limits_roundtrip_and_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Лимиты по группам сохраняются атомарно, нормализуют имя группы и читаются обратно.
+    """
+    import config
+
+    limits_path = tmp_path / "group_stock_limits.json"
+    monkeypatch.setattr(
+        config,
+        "GROUP_STOCK_LIMITS_JSON_PATH",
+        str(limits_path),
+    )
+
+    from storage.data_store import get_limit, list_all_limits, set_limit
+
+    set_limit(" Велосипеды ", 3)
+
+    payload = json.loads(limits_path.read_text(encoding="utf-8"))
+    assert payload["count"] == 1
+    assert payload["limits"] == {"Велосипеды": 3}
+    assert get_limit("Велосипеды") == 3
+    assert list_all_limits() == {"Велосипеды": 3}
+
+
+def test_clear_limit_removes_group_from_registry(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    clear_limit удаляет ключ из словаря лимитов и снимает группу с надзора.
+    """
+    import config
+
+    limits_path = tmp_path / "group_stock_limits.json"
+    monkeypatch.setattr(
+        config,
+        "GROUP_STOCK_LIMITS_JSON_PATH",
+        str(limits_path),
+    )
+
+    from storage.data_store import (
+        clear_limit,
+        get_limit,
+        list_all_limits,
+        set_limit,
+    )
+
+    set_limit("Велосипеды", 3)
+    set_limit("", 0)
+    clear_limit(" Велосипеды ")
+
+    assert get_limit("Велосипеды") is None
+    assert list_all_limits() == {TOP_CATEGORY_FALLBACK_LABEL: 0}
+
+
+def test_group_stock_limits_corrupt_json_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """
+    Повреждённый group_stock_limits.json
+    не валит рантайм и даёт пустой словарь.
+    """
+    import config
+
+    limits_path = tmp_path / "group_stock_limits.json"
+    limits_path.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(
+        config,
+        "GROUP_STOCK_LIMITS_JSON_PATH",
+        str(limits_path),
+    )
+
+    from storage.data_store import get_limit, list_all_limits
+
+    assert list_all_limits() == {}
+    assert get_limit("Велосипеды") is None
+
+
 def test_parse_stock_always_reads_columns_a_through_e(tmp_path: Path) -> None:
     """
     Строки, где в файле заполнена только A (категория), не должны давать IndexError
@@ -200,3 +376,286 @@ def test_parse_stock_always_reads_columns_a_through_e(tmp_path: Path) -> None:
     assert len(items) == 1
     assert items[0]["name"] == "Товар 1"
     assert items[0]["quantity"] == 2
+
+
+def test_run_parse_pipeline_single_telegram_send_for_multiple_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Этап 7: один прогон парсинга — одна отправка (HTML по всем группам).
+    """
+    items = [
+        {"top_category": "Альфа", "name": "s1", "quantity": 1},
+        {"top_category": "Бета", "name": "s2", "quantity": 2},
+    ]
+    sends: list[str] = []
+
+    monkeypatch.setattr("services.stock_pipeline.parse_stock", lambda: items)
+    monkeypatch.setattr("services.stock_pipeline.save_items", lambda _x: None)
+    monkeypatch.setattr(
+        "services.stock_pipeline.filter_by_threshold",
+        lambda _x: [],
+    )
+    monkeypatch.setattr(
+        "services.stock_pipeline.generate_filtered_xlsx",
+        lambda _x: None,
+    )
+    monkeypatch.setattr(
+        "services.stock_pipeline.list_all_limits",
+        lambda: {"Альфа": 5, "Бета": 5},
+    )
+    monkeypatch.setattr(
+        "services.stock_pipeline.send_group_limit_alert_html",
+        lambda html: sends.append(html),
+    )
+
+    from services.stock_pipeline import run_parse_and_save_filtered
+
+    all_n, filt_n = run_parse_and_save_filtered()
+    assert all_n == 2
+    assert filt_n == 0
+    assert len(sends) == 1
+    assert "Альфа" in sends[0] and "Бета" in sends[0]
+
+
+def test_run_parse_pipeline_no_alert_when_no_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """При пустом словаре лимитов ветка отправки не вызывается."""
+    sends: list[str] = []
+
+    monkeypatch.setattr(
+        "services.stock_pipeline.parse_stock",
+        lambda: [{"top_category": "X", "name": "n", "quantity": 1}],
+    )
+    monkeypatch.setattr("services.stock_pipeline.save_items", lambda _x: None)
+    monkeypatch.setattr(
+        "services.stock_pipeline.filter_by_threshold",
+        lambda _x: [],
+    )
+    monkeypatch.setattr(
+        "services.stock_pipeline.generate_filtered_xlsx",
+        lambda _x: None,
+    )
+    monkeypatch.setattr("services.stock_pipeline.list_all_limits", lambda: {})
+    monkeypatch.setattr(
+        "services.stock_pipeline.send_group_limit_alert_html",
+        lambda html: sends.append(html),
+    )
+
+    from services.stock_pipeline import run_parse_and_save_filtered
+
+    run_parse_and_save_filtered()
+    assert sends == []
+
+
+def _write_minimal_stock_xlsx(path: Path) -> None:
+    """Один SKU (indent 10) для parse_stock."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    r_cat = HEADER_ROWS + 1
+    cat_cell = ws.cell(row=r_cat, column=1, value="Группа")
+    cat_cell.alignment = Alignment(indent=4)
+    r_item = r_cat + 1
+    item_cell = ws.cell(row=r_item, column=1, value="Товар 1")
+    item_cell.alignment = Alignment(indent=10)
+    ws.cell(row=r_item, column=4, value=2)
+    ws.cell(row=r_item, column=5, value=50)
+    wb.save(path)
+
+
+def test_revision_skips_when_no_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Этап 7а: пустой реестр лимитов — fetch и парсинг не вызываются."""
+    fetch_calls: list[int] = []
+
+    def boom() -> None:
+        fetch_calls.append(1)
+        raise AssertionError("fetch_and_save не должен вызываться")
+
+    monkeypatch.setattr(
+        "services.group_limit_revision.list_all_limits",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        "services.group_limit_revision.fetch_and_save",
+        boom,
+    )
+    from services.group_limit_revision import run_weekly_group_limit_revision
+
+    run_weekly_group_limit_revision()
+    assert fetch_calls == []
+
+
+def test_local_snapshot_acceptable_last_check_is_today_moscow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime
+
+    from zoneinfo import ZoneInfo
+
+    import config
+
+    path = tmp_path / "current.xlsx"
+    _write_minimal_stock_xlsx(path)
+    monkeypatch.setattr(config, "CURRENT_XLSX_PATH", str(path))
+    monkeypatch.setattr(
+        "services.group_limit_revision.get_last_check_date",
+        lambda: "2026-04-19",
+    )
+    ref = datetime(2026, 4, 19, 11, 0, tzinfo=ZoneInfo("Europe/Moscow"))
+    from services.group_limit_revision import (
+        local_snapshot_acceptable_for_limit_revision,
+    )
+
+    assert local_snapshot_acceptable_for_limit_revision(reference=ref) is True
+
+
+def test_local_snapshot_acceptable_via_updated_at_meta(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from datetime import datetime
+
+    from zoneinfo import ZoneInfo
+
+    import config
+
+    path = tmp_path / "current.xlsx"
+    _write_minimal_stock_xlsx(path)
+    monkeypatch.setattr(config, "CURRENT_XLSX_PATH", str(path))
+    monkeypatch.setattr(
+        "services.group_limit_revision.get_last_check_date",
+        lambda: "2026-04-01",
+    )
+    monkeypatch.setattr(
+        "services.group_limit_revision.read_meta_json",
+        lambda: {"updated_at": "2026-04-18T12:00:00"},
+    )
+    ref = datetime(2026, 4, 19, 12, 0, tzinfo=ZoneInfo("Europe/Moscow"))
+    from services.group_limit_revision import (
+        local_snapshot_acceptable_for_limit_revision,
+    )
+
+    assert local_snapshot_acceptable_for_limit_revision(reference=ref) is True
+
+
+def test_run_weekly_revision_local_path_calls_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    items = [{"top_category": "А", "name": "x", "quantity": 1}]
+    sent: list[list[dict]] = []
+
+    monkeypatch.setattr(
+        "services.group_limit_revision.list_all_limits",
+        lambda: {"А": 5},
+    )
+    monkeypatch.setattr(
+        "services.group_limit_revision.local_snapshot_acceptable_for_limit_revision",
+        lambda reference=None: True,
+    )
+    monkeypatch.setattr(
+        "services.group_limit_revision.parse_stock",
+        lambda _p=None: items,
+    )
+    monkeypatch.setattr(
+        "services.group_limit_revision.send_group_limit_alerts_for_items",
+        lambda data, **_kw: sent.append(data),
+    )
+
+    from services.group_limit_revision import run_weekly_group_limit_revision
+
+    run_weekly_group_limit_revision()
+    assert len(sent) == 1 and sent[0] is items
+
+
+def test_run_weekly_revision_updated_calls_full_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from parser.mail_fetcher import MailFetchOutcome
+
+    monkeypatch.setattr(
+        "services.group_limit_revision.list_all_limits",
+        lambda: {"А": 1},
+    )
+    monkeypatch.setattr(
+        "services.group_limit_revision.local_snapshot_acceptable_for_limit_revision",
+        lambda reference=None: False,
+    )
+    monkeypatch.setattr(
+        "services.group_limit_revision.fetch_and_save",
+        lambda: MailFetchOutcome.UPDATED,
+    )
+    called: list[str] = []
+
+    def fake_run_parse() -> tuple[int, int]:
+        called.append("run_parse")
+        return (1, 0)
+
+    monkeypatch.setattr(
+        "services.group_limit_revision.run_parse_and_save_filtered",
+        fake_run_parse,
+    )
+
+    from services.group_limit_revision import run_weekly_group_limit_revision
+
+    run_weekly_group_limit_revision()
+    assert called == ["run_parse"]
+
+
+def test_send_group_limit_alerts_build_error_does_not_propagate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Этап 8: сбой расчёта нарушений/HTML не ломает вызывающий код."""
+    sends: list[str] = []
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("build")
+
+    monkeypatch.setattr("services.stock_pipeline.list_all_limits", lambda: {"A": 1})
+    monkeypatch.setattr(
+        "services.stock_pipeline.find_group_limit_violations",
+        boom,
+    )
+    monkeypatch.setattr(
+        "services.stock_pipeline.send_group_limit_alert_html",
+        lambda h: sends.append(h),
+    )
+    from services.stock_pipeline import send_group_limit_alerts_for_items
+
+    send_group_limit_alerts_for_items([])
+    assert sends == []
+
+
+def test_send_group_limit_alerts_send_error_does_not_propagate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Этап 8: исключение из ветки отправки не пробрасывается наружу."""
+
+    def boom(_html: str) -> None:
+        raise RuntimeError("send")
+
+    monkeypatch.setattr("services.stock_pipeline.list_all_limits", lambda: {"А": 5})
+    monkeypatch.setattr(
+        "services.stock_pipeline.find_group_limit_violations",
+        lambda _items, _limits: [
+            {
+                "group": "А",
+                "limit": 5,
+                "positions": [{"name": "x", "quantity": 1}],
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "services.stock_pipeline.format_group_limit_alerts_html",
+        lambda _v: "<b>x</b>",
+    )
+    monkeypatch.setattr(
+        "services.stock_pipeline.send_group_limit_alert_html",
+        boom,
+    )
+    from services.stock_pipeline import send_group_limit_alerts_for_items
+
+    send_group_limit_alerts_for_items(
+        [{"top_category": "А", "name": "x", "quantity": 1}],
+    )

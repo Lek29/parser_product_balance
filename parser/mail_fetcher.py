@@ -1,13 +1,25 @@
 """
 Модуль получения Excel-остатков с корпоративной почты.
 
-Подключается к почтовому серверу Яндекс по IMAP SSL, собирает вложения-архивы
-(.zip или .rar) с именем по префиксу ``MAIL_STOCK_ARCHIVE_PREFIX`` (по умолчанию
-«Остатки от »), выбирает один архив с максимальной датой в имени файла
-(при неоднозначности — более новое письмо по заголовку Date), скачивает его
-в папку temp/,
-распаковывает и сохраняет найденный .xlsx файл в storage/current.xlsx.
-Метаданные (дата письма, имя файла) сохраняются в storage/meta.json.
+Подключается к почтовому серверу по IMAP SSL и открывает папку
+:data:`config.EMAIL_IMAP_FOLDER` (по умолчанию ``INBOX``; для рассылок часто
+отдельная папка, например ``Stock``, см. ``docs/mail-prerequisites.md``).
+
+Собирает вложения-архивы (.zip / .rar) с именем по префиксу
+:data:`config.MAIL_STOCK_ARCHIVE_PREFIX` (по умолчанию «Остатки от »),
+выбирает архив с максимальной датой в имени файла (при неоднозначности —
+более новое письмо по заголовку ``Date``), скачивает во ``temp/``,
+распаковывает и сохраняет ``.xlsx`` в ``storage/current.xlsx``. Метаданные —
+в ``storage/meta.json``.
+
+Если задано положительное :data:`config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS`
+``(N)``, обход писем от новых к старым может **прерваться** без загрузки
+полного тела, когда по заголовку ``Date`` письмо однозначно старше ``N``
+календарных дней (оптимизация; см. ``docs/fix_mail.md``). При ``None`` (в т.ч.
+env ``0`` или отрицательное) окно отключено. Невалидный или пустой ``Date``
+**не** используется для раннего выхода — ``RFC822`` подгружается; дата **строго
+после** «сегодня» тоже не даёт раннего выхода. Актуальность отчёта по смыслу —
+из даты в **имени файла**, не только из этого окна.
 """
 
 import email
@@ -38,7 +50,7 @@ _RE_STOCK_FILENAME_ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
 @dataclass(frozen=True)
 class _StockArchiveCandidate:
     """
-    Вложение-архив остатков и ключи выбора «лучшего» среди писем INBOX.
+    Вложение-архив остатков и ключи выбора «лучшего» среди писем в выбранной IMAP-папке.
 
     :ivar msg: Полное RFC822-сообщение (для скачивания вложения).
     :ivar filename: Декодированное имя файла.
@@ -149,6 +161,42 @@ def _parse_email_date_for_sort(date_header: str) -> datetime:
         return datetime.min.replace(tzinfo=None)
 
 
+_MIN_NAIVE_DATETIME = datetime.min.replace(tzinfo=None)
+
+
+def _scan_should_stop_before_rfc822(
+    date_header: str,
+    max_age_days: Optional[int],
+    today: date,
+) -> Tuple[bool, bool]:
+    """
+    Окно по возрасту письма по заголовку ``Date`` (только оптимизация обхода IMAP).
+
+    Бизнес-дата остатков по-прежнему из имени файла; см. ``docs/fix_mail.md`` §4.
+    При ``max_age_days is None`` окно выключено.
+
+    :param date_header: Сырая строка заголовка ``Date`` из ``BODY.PEEK[HEADER]``.
+    :param max_age_days: Положительное ``N`` или ``None`` (без ограничения).
+    :param today: Календарная дата для сравнения (обычно ``date.today()``).
+    :returns: Пара ``(stop_scan, date_unparsed)``. ``stop_scan`` — прервать цикл,
+        не вызывая ``fetch(RFC822)`` для этого и последующих писем (письмо однозначно
+        старше окна). ``date_unparsed`` — заголовок не разобран (как ``datetime.min``):
+        ранний выход **не** применять; вызывающий подгружает ``RFC822`` и пишет warning.
+    """
+    if max_age_days is None:
+        return False, False
+    dt = _parse_email_date_for_sort(date_header)
+    if dt == _MIN_NAIVE_DATETIME:
+        return False, True
+    d = dt.date()
+    # Дата в будущем: не считаем письмо «старше окна» (ошибка TZ/сервера).
+    if d > today:
+        return False, False
+    if (today - d).days > max_age_days:
+        return True, False
+    return False, False
+
+
 def _msg_id_numeric(msg_id: bytes) -> int:
     """
     Числовой UID/msg id для устойчивого сравнения при равных датах.
@@ -167,6 +215,10 @@ def _msg_id_numeric(msg_id: bytes) -> int:
 def _filename_has_stock_prefix(filename: str) -> bool:
     """
     Проверяет, что нормализованное имя (stem) начинается с префикса остатков.
+
+    Вместе с :func:`_is_archive_extension` — отбор только ``.zip`` / ``.rar`` и stem
+    с префиксом :data:`config.MAIL_STOCK_ARCHIVE_PREFIX`. Иной шаблон имени у отправителя:
+    обновить env и/или :func:`_parse_date_after_stock_prefix`.
 
     Сравнение префикса без учёта регистра (``casefold``).
 
@@ -296,11 +348,48 @@ def _connect_imap() -> imaplib.IMAP4_SSL:
     return imap
 
 
+def _select_mail_folder(imap: imaplib.IMAP4_SSL) -> None:
+    """
+    Открывает IMAP-папку :data:`config.EMAIL_IMAP_FOLDER` для последующего поиска.
+
+    :param imap: Авторизованное соединение IMAP.
+    :type imap: imaplib.IMAP4_SSL
+    :raises RuntimeError: Если сервер вернул не ``OK`` на ``SELECT`` (папка отсутствует
+        или имя неверно).
+    :raises imaplib.IMAP4.error: При ошибке протокола/сети на ``SELECT``.
+    """
+    folder = config.EMAIL_IMAP_FOLDER
+    try:
+        typ, data = imap.select(folder)
+    except imaplib.IMAP4.error as exc:
+        logger.error("Ошибка IMAP SELECT для папки %r: %s", folder, exc)
+        raise
+    if typ != "OK":
+        detail = ""
+        if data:
+            first = data[0]
+            detail = (
+                first.decode("utf-8", errors="replace").strip()
+                if isinstance(first, bytes)
+                else str(first)
+            )
+        logger.error(
+            "Не удалось открыть IMAP-папку %r (ответ сервера: %s). "
+            "Проверьте EMAIL_IMAP_FOLDER.",
+            folder,
+            detail or typ,
+        )
+        raise RuntimeError(
+            f"Не удалось открыть IMAP-папку {folder!r}: {detail or typ}"
+        )
+
+
 def _find_latest_archive_attachment(
     imap: imaplib.IMAP4_SSL,
 ) -> Tuple[Optional[email.message.Message], Optional[str], Optional[str]]:
     """
-    Ищет в INBOX одно вложение — архив остатков (.zip / .rar) с подходящим именем.
+    Ищет в настроенной IMAP-папке (:data:`config.EMAIL_IMAP_FOLDER`) одно вложение —
+    архив остатков (.zip / .rar) с подходящим именем.
 
     Учитываются только файлы, у которых основа имени начинается с
     :data:`config.MAIL_STOCK_ARCHIVE_PREFIX` (сравнение без учёта регистра).
@@ -314,12 +403,18 @@ def _find_latest_archive_attachment(
     больший IMAP ``msg_id``, затем лексикографически большее имя файла.
 
     .. note:: Технический долг (см. ``docs/refactoring-plan2.md`` §B.6): при очень
-       большом INBOX полный перебор ID может быть медленным. Возможные меры
-       (после замеров): ограничение глубины, отдельная папка, UID SEARCH по дате.
+       большом числе писем в папке полный перебор ID может быть медленным. Возможные меры
+       (после замеров): ограничение глубины, отдельная папка только с остатками,
+       UID SEARCH по дате.
 
     Двухфазный обход (трафик):
 
     - Фаза 1: ``BODY.PEEK[HEADER]`` — отсев не-multipart.
+    - Если задано :data:`config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS` (положительное ``N``),
+      по заголовку ``Date`` письма при multipart: при однозначном превышении возраста
+      ``N`` календарных дней обход **прерывается** без ``RFC822`` для этого и более
+      старых писем. Битый ``Date`` или дата в будущем не дают раннего выхода
+      (тело подгружается); см. :func:`_scan_should_stop_before_rfc822`.
     - Фаза 2: ``RFC822`` для multipart — сбор всех кандидатов с подходящим именем.
 
     :param imap: Авторизованный IMAP объект.
@@ -329,21 +424,25 @@ def _find_latest_archive_attachment(
               :func:`fetch_and_save` — ``NO_CHANGES``, без подмены чужим архивом).
     :rtype: Tuple[Optional[email.message.Message], Optional[str], Optional[str]]
     """
-    imap.select("INBOX")
+    _select_mail_folder(imap)
+    folder = config.EMAIL_IMAP_FOLDER
     _, msg_ids_raw = imap.search(None, "ALL")
     msg_ids = msg_ids_raw[0].split()
 
     if not msg_ids:
-        logger.warning("Папка INBOX пуста.")
+        logger.warning("Папка IMAP %r пуста.", folder)
         return None, None, None
 
     logger.info(
-        "Найдено писем в INBOX: %d. Сбор архивов остатков (префикс «%s»)...",
+        "Найдено писем в папке %r: %d. Сбор архивов остатков (префикс «%s»)...",
+        folder,
         len(msg_ids),
         config.MAIL_STOCK_ARCHIVE_PREFIX.strip(),
     )
 
     candidates: List[_StockArchiveCandidate] = []
+    today = date.today()
+    max_msg_age = config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS
 
     for msg_id in reversed(msg_ids):
         # Фаза 1: загружаем только заголовки — дёшево (~2-5 КБ на письмо)
@@ -358,13 +457,34 @@ def _find_latest_archive_attachment(
         if "multipart" not in content_type:
             continue
 
+        date_str = headers.get("Date", "")
+        stop_scan, date_unparsed = _scan_should_stop_before_rfc822(
+            date_str, max_msg_age, today
+        )
+        if date_unparsed and max_msg_age is not None:
+            logger.warning(
+                "Заголовок Date не разобран, ранний выход по окну (%s дн.) не "
+                "применяется; подгружаем RFC822 (письмо id=%s).",
+                max_msg_age,
+                msg_id.decode("ascii", errors="replace"),
+            )
+        if stop_scan:
+            logger.info(
+                "Окно по дате письма (%s дн.): письмо id=%s старше окна (Date=%s), "
+                "обход остановлен.",
+                max_msg_age,
+                msg_id.decode("ascii", errors="replace"),
+                date_str,
+            )
+            break
+
         # Фаза 2: письмо многочастное — загружаем полностью
         _, msg_data = imap.fetch(msg_id, "(RFC822)")
         if not msg_data or not msg_data[0]:
             continue
 
         msg = email.message_from_bytes(msg_data[0][1])
-        date_str = msg.get("Date", "")
+        date_str = msg.get("Date", "") or date_str
         email_dt = _parse_email_date_for_sort(date_str)
 
         for part in msg.walk():
