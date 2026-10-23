@@ -20,6 +20,7 @@ Telegram-бот для мониторинга товарных остатков.
 | Компонент | Технология |
 |-----------|-----------|
 | Язык | Python 3.12 |
+| Пакеты | uv (`pyproject.toml` + `uv.lock`) |
 | Telegram | python-telegram-bot 22.x (async) |
 | Почта | imaplib + IMAP SSL |
 | Excel | openpyxl |
@@ -35,7 +36,9 @@ Telegram-бот для мониторинга товарных остатков.
 .
 ├── main.py                  # Точка входа
 ├── config.py                # Загрузка переменных окружения
-├── requirements.txt
+├── pyproject.toml           # Зависимости и метаданные проекта
+├── uv.lock                  # Зафиксированные версии (uv)
+├── .python-version          # Версия Python для uv
 ├── Dockerfile
 ├── docker-compose.yaml
 ├── .dockerignore
@@ -133,27 +136,24 @@ STOCK_THRESHOLD=5
 
 ### Локально
 
-```bash
-# Создать виртуальное окружение
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # Linux/macOS
+Нужен [uv](https://docs.astral.sh/uv/).
 
-# Установить зависимости
-pip install -r requirements.txt
+```bash
+# Создать .venv и поставить зависимости (включая pytest из группы dev)
+uv sync
 
 # Запустить
-python main.py
+uv run python main.py
 ```
 
 Минимальные тесты (без сети и Telegram):
 
 ```bash
-pytest tests/
+uv run pytest tests/
 ```
 
-Разовая проверка загрузки с почты без бота: `python scripts/dev_fetch_mail.py` (нужен валидный `.env`).  
-Просмотр `meta.json`: `python scripts/show_meta.py`.
+Разовая проверка загрузки с почты без бота: `uv run python scripts/dev_fetch_mail.py` (нужен валидный `.env`).  
+Просмотр `meta.json`: `uv run python scripts/show_meta.py`.
 
 > На Linux для поддержки `.rar` установите `unrar`:
 > ```bash
@@ -232,6 +232,6 @@ Inline-меню:
 4. Распарсить таблицу → `storage/data.json` (кэш полного списка)
 5. Сгенерировать выгрузку → `storage/filtered.xlsx`
 
-Ручная очистка почты: `python scripts/cleanup_stock_mail.py` (dry-run) / `--execute`.
+Ручная очистка почты: `uv run python scripts/cleanup_stock_mail.py` (dry-run) / `--execute`.
 
 При очень большом числе товарных групп reply-клавиатура «частичной фильтрации» может стать громоздкой; возможная пагинация групп — отдельная доработка (см. `docs/refactoring-plan2.md`).

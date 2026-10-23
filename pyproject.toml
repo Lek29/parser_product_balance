@@ -1,0 +1,20 @@
+[project]
+name = "parser-ostatkov"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "apscheduler>=3.10.0",
+    "httpx>=0.27.0",
+    "openpyxl>=3.1.0",
+    "python-dotenv>=1.0.0",
+    "python-telegram-bot>=22.0,<23",
+    "rarfile>=4.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
