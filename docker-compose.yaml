@@ -1,16 +1,11 @@
 services:
   bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: parser-ostatkov-bot:latest
+    image: ghcr.io/lek29/parser_product_balance:latest
     container_name: parser-ostatkov-bot
     restart: unless-stopped
     env_file: .env
     environment:
       TZ: Europe/Moscow
-    # Лимиты для обычного `docker compose up` (не Swarm).
-    # В Swarm-режиме используйте блок deploy ниже.
     cpus: 0.25
     mem_limit: 128m
     mem_reservation: 64m

@@ -1,44 +1,76 @@
-# CI: проверка Python-кода линтером Ruff при каждом пуше в main.
-name: CI
+name: CI/CD Pipeline
 
-# Когда запускать пайплайн: только push в ветку main.
 on:
   push:
     branches:
       - main
 
 jobs:
-  # Одна простая job: скачать код, поставить uv, прогнать ruff.
   lint:
+    name: Run Linter
     runs-on: ubuntu-latest
     steps:
-      # Шаг 1: скачать код репозитория в рабочую директорию раннера.
-      - name: Checkout repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: Run Ruff
+        run: uvx ruff check .
+
+  build:
+    name: Build and Push Docker Image
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # Разрешаем загрузку образа в реестр GitHub
+
+    steps:
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # Шаг 2: установить uv (официальный action от Astral) и добавить его в PATH.
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      # Шаг 3: проверить код Ruff через uvx (сам скачает и запустит ruff, без uv sync).
-      - name: Run Ruff linter
-        run: uvx ruff check .
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/lek29/parser_product_balance:latest
 
   deploy:
     name: Deploy to VPS
-    needs: lint
+    needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-
     steps:
-      - name: Executing remote ssh commands to deploy
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          USERNAME: ${{ github.actor }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          command_timeout: 30m
+          envs: GITHUB_TOKEN,USERNAME
           script: |
+            # 1. Авторизуем сервер для скачивания приватного образа
+            echo $GITHUB_TOKEN | docker login ghcr.io -u $USERNAME --password-stdin
+            
+            # 2. Переходим в папку проекта и подтягиваем новый docker-compose.yml
             cd /opt/projects/fanat_product_balance
             git pull origin main
-            docker compose up --build -d
+            
+            # 3. Скачиваем готовый образ с серверов GitHub
+            docker compose pull
+            
+            # 4. Перезапускаем контейнер из нового образа
+            docker compose up -d
