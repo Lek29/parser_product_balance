@@ -23,3 +23,21 @@ jobs:
       # Шаг 3: проверить код Ruff через uvx (сам скачает и запустит ruff, без uv sync).
       - name: Run Ruff linter
         run: uvx ruff check .
+
+  deploy:
+    name: Deploy to VPS
+    needs: lint
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Executing remote ssh commands to deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /opt/projects/fanat_product_balance
+            git pull origin main
+            docker compose up --build -d
