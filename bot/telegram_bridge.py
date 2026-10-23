@@ -1,9 +1,10 @@
 """
 Мост для отправки сообщений из синхронного кода в цикл polling PTB.
 
-Планировщик и другие потоки вызывают :func:`send_group_limit_alert_html`;
-отправка выполняется через :func:`asyncio.run_coroutine_threadsafe` на тот же
-``event_loop``, где работает бот (см. ``docs/fourty_role.md``, этап 6).
+Планировщик и другие потоки вызывают :func:`send_group_limit_alert_html` и
+:func:`send_zero_sold_xlsx`; отправка через
+:func:`asyncio.run_coroutine_threadsafe` на тот же ``event_loop``, где
+работает бот (см. ``docs/fourty_role.md``, ``docs/push_message_about_zero.md``).
 """
 
 from __future__ import annotations
@@ -103,3 +104,69 @@ def send_group_limit_alert_html(html: str) -> None:
         chat_id,
         len(html),
     )
+
+
+def send_zero_sold_xlsx(
+    path: str,
+    *,
+    caption: str,
+    filename: str,
+) -> bool:
+    """
+    Отправляет xlsx «ушли в ноль» в личку (:func:`config.resolve_zero_sold_alert_chat_id`).
+
+    :param path: Локальный путь к файлу ``.xlsx``.
+    :type path: str
+    :param caption: Подпись к документу.
+    :type caption: str
+    :param filename: Имя файла, видимое в Telegram (с датой).
+    :type filename: str
+    :returns: ``True``, если отправка завершилась без исключения.
+    :rtype: bool
+    :side effects: HTTP ``sendDocument`` в цикле polling.
+    """
+    chat_id = config.resolve_zero_sold_alert_chat_id()
+    if chat_id is None:
+        logger.warning(
+            "Telegram bridge: chat id для zero-sold не задан "
+            "(ZERO_SOLD_ALERT_CHAT_ID / STOCK_LIMIT_ALERT_CHAT_ID) — файл не отправлен.",
+        )
+        return False
+
+    if _bot is None or _loop is None:
+        logger.warning(
+            "Telegram bridge: bot/loop не зарегистрированы — zero-sold xlsx "
+            "не отправлен (chat_id=%s).",
+            chat_id,
+        )
+        return False
+
+    async def _send() -> None:
+        with open(path, "rb") as f:
+            await _bot.send_document(
+                chat_id=chat_id,
+                document=f,
+                filename=filename,
+                caption=caption,
+                write_timeout=120,
+                read_timeout=60,
+            )
+
+    fut = asyncio.run_coroutine_threadsafe(_send(), _loop)
+    try:
+        fut.result(timeout=120)
+    except Exception as e:
+        logger.error(
+            "Telegram bridge: ошибка send_document zero-sold в chat_id=%s: %s",
+            chat_id,
+            e,
+            exc_info=True,
+        )
+        return False
+
+    logger.info(
+        "Telegram bridge: zero-sold xlsx отправлен в chat_id=%s file=%s",
+        chat_id,
+        filename,
+    )
+    return True

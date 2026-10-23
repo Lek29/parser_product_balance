@@ -91,6 +91,18 @@ def main() -> None:
             config.STOCK_LIMIT_ALERT_CHAT_ID,
         )
 
+    zero_chat = config.resolve_zero_sold_alert_chat_id()
+    if zero_chat is None:
+        logger.info(
+            "Zero-sold DM выключен — нет ZERO_SOLD_ALERT_CHAT_ID / "
+            "STOCK_LIMIT_ALERT_CHAT_ID.",
+        )
+    else:
+        logger.info(
+            "Zero-sold DM включён (chat_id=%s) — xlsx «ушли в ноль».",
+            zero_chat,
+        )
+
     scheduler = create_scheduler()
     scheduler.start()
     logger.info("Планировщик запущен.")

@@ -409,6 +409,38 @@ def test_group_stock_limits_corrupt_json_returns_empty(
     assert get_limit("Велосипеды") is None
 
 
+def test_parse_stock_read_only_preserves_indent_hierarchy(tmp_path: Path) -> None:
+    """read_only parse: категории (indent 4) и SKU (indent 10) связываются верно."""
+    path = tmp_path / "stock_indent.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    r = HEADER_ROWS + 1
+    cat = ws.cell(row=r, column=1, value="Категория А")
+    cat.alignment = Alignment(indent=4)
+    r += 1
+    item = ws.cell(row=r, column=1, value="Товар А1")
+    item.alignment = Alignment(indent=10)
+    ws.cell(row=r, column=4, value=3)
+    ws.cell(row=r, column=5, value=100)
+    r += 1
+    cat2 = ws.cell(row=r, column=1, value="Категория Б")
+    cat2.alignment = Alignment(indent=4)
+    r += 1
+    item2 = ws.cell(row=r, column=1, value="Товар Б1")
+    item2.alignment = Alignment(indent=10)
+    ws.cell(row=r, column=4, value=1)
+    ws.cell(row=r, column=5, value=50)
+    wb.save(path)
+
+    items = parse_stock(str(path))
+    assert len(items) == 2
+    assert items[0]["top_category"] == "Категория А"
+    assert items[0]["name"] == "Товар А1"
+    assert items[0]["quantity"] == 3
+    assert items[1]["top_category"] == "Категория Б"
+    assert items[1]["name"] == "Товар Б1"
+
+
 def test_parse_stock_always_reads_columns_a_through_e(tmp_path: Path) -> None:
     """
     Строки, где в файле заполнена только A (категория), не должны давать IndexError
@@ -463,6 +495,10 @@ def test_run_parse_pipeline_single_telegram_send_for_multiple_groups(
         lambda _x: None,
     )
     monkeypatch.setattr(
+        "services.zero_sold.run_zero_sold_check_after_parse",
+        lambda _items: None,
+    )
+    monkeypatch.setattr(
         "services.stock_pipeline.list_all_limits",
         lambda: {"Альфа": 5, "Бета": 5},
     )
@@ -505,6 +541,10 @@ def test_run_parse_pipeline_no_alert_when_no_limits(
     monkeypatch.setattr(
         "services.stock_pipeline.generate_filtered_xlsx",
         lambda _x: None,
+    )
+    monkeypatch.setattr(
+        "services.zero_sold.run_zero_sold_check_after_parse",
+        lambda _items: None,
     )
     monkeypatch.setattr("services.stock_pipeline.list_all_limits", lambda: {})
     monkeypatch.setattr(

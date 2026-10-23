@@ -64,6 +64,11 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
     с indent 10 и 12, обогащённые контекстом родительских уровней.
     Строки заголовка (1-7) пропускаются.
 
+    Загрузка через ``read_only=True, data_only=True``: на реальных выгрузках
+    остатков indent сохраняется, а полный проход заметно быстрее обычного
+    ``load_workbook`` (меньше RAM, потоковое чтение). Workbook закрывается
+    в ``finally``.
+
     :param xlsx_path: Путь к xlsx-файлу. По умолчанию config.CURRENT_XLSX_PATH.
     :type xlsx_path: Optional[str]
     :returns: Список словарей с полями:
@@ -86,73 +91,80 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
     if not os.path.exists(path):
         raise FileNotFoundError(f"Файл остатков не найден: {path}")
 
-    wb = openpyxl.load_workbook(path)
-    ws = wb.active
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws = wb.active
 
-    # Текущий контекст иерархии: {indent: название}
-    context: dict[float, str] = {}
-    items = []
+        # Текущий контекст иерархии: {indent: название}
+        context: dict[float, str] = {}
+        items = []
 
-    for row_idx, row in enumerate(
-        ws.iter_rows(
-            min_row=HEADER_ROWS + 1,
-            min_col=_STOCK_SHEET_MIN_COL,
-            max_col=_STOCK_SHEET_MAX_COL,
-        ),
-        start=HEADER_ROWS + 1,
-    ):
-        cell_name = row[0]  # колонка A
-        cell_qty = row[3]   # колонка D
-        cell_price = row[4]  # колонка E
+        for row_idx, row in enumerate(
+            ws.iter_rows(
+                min_row=HEADER_ROWS + 1,
+                min_col=_STOCK_SHEET_MIN_COL,
+                max_col=_STOCK_SHEET_MAX_COL,
+            ),
+            start=HEADER_ROWS + 1,
+        ):
+            cell_name = row[0]  # колонка A
+            cell_qty = row[3]   # колонка D
+            cell_price = row[4]  # колонка E
 
-        name = cell_name.value
-        if name is None:
-            continue
-
-        name = str(name).strip()
-        if not name:
-            continue
-
-        indent = cell_name.alignment.indent if cell_name.alignment else 0.0
-        indent = float(indent)
-
-        # Обновляем контекст для категорий (indent 4, 6, 8)
-        if indent in INDENT_TO_LEVEL:
-            context[indent] = name
-            # Сбрасываем все дочерние уровни при смене родителя
-            for child_indent in list(context.keys()):
-                if child_indent > indent:
-                    del context[child_indent]
-            continue
-
-        # Обрабатываем реальные товарные позиции (indent 10, 12)
-        if indent in PRODUCT_INDENTS:
-            qty = cell_qty.value
-            price = cell_price.value
-
-            # Пропускаем строки без количества
-            if qty is None:
+            name = cell_name.value
+            if name is None:
                 continue
 
-            try:
-                qty = int(qty)
-                price = int(price) if price is not None else None
-            except (ValueError, TypeError):
-                logger.warning("Строка %d: не удалось привести qty/price к int: %s / %s",
-                               row_idx, qty, price)
+            name = str(name).strip()
+            if not name:
                 continue
 
-            items.append({
-                "top_category": context.get(4.0, ""),
-                "subcategory": context.get(6.0, ""),
-                "brand": context.get(8.0, ""),
-                "name": name,
-                "quantity": qty,
-                "price": price,
-            })
+            indent = cell_name.alignment.indent if cell_name.alignment else 0.0
+            indent = float(indent)
 
-    logger.info("Всего товарных позиций в файле: %d", len(items))
-    return items
+            # Обновляем контекст для категорий (indent 4, 6, 8)
+            if indent in INDENT_TO_LEVEL:
+                context[indent] = name
+                # Сбрасываем все дочерние уровни при смене родителя
+                for child_indent in list(context.keys()):
+                    if child_indent > indent:
+                        del context[child_indent]
+                continue
+
+            # Обрабатываем реальные товарные позиции (indent 10, 12)
+            if indent in PRODUCT_INDENTS:
+                qty = cell_qty.value
+                price = cell_price.value
+
+                # Пропускаем строки без количества
+                if qty is None:
+                    continue
+
+                try:
+                    qty = int(qty)
+                    price = int(price) if price is not None else None
+                except (ValueError, TypeError):
+                    logger.warning(
+                        "Строка %d: не удалось привести qty/price к int: %s / %s",
+                        row_idx,
+                        qty,
+                        price,
+                    )
+                    continue
+
+                items.append({
+                    "top_category": context.get(4.0, ""),
+                    "subcategory": context.get(6.0, ""),
+                    "brand": context.get(8.0, ""),
+                    "name": name,
+                    "quantity": qty,
+                    "price": price,
+                })
+
+        logger.info("Всего товарных позиций в файле: %d", len(items))
+        return items
+    finally:
+        wb.close()
 
 
 def normalize_top_category_label(raw: str) -> str:

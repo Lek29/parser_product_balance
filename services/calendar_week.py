@@ -54,6 +54,18 @@ def week_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
+def previous_week_monday(d: date) -> date:
+    """
+    Понедельник предыдущей календарной недели относительно ``d``.
+
+    :param d: Любая дата.
+    :type d: date
+    :returns: Пн прошлой недели.
+    :rtype: date
+    """
+    return week_monday(d) - timedelta(days=7)
+
+
 def same_calendar_week(a: date, b: date) -> bool:
     """
     Проверяет, что две даты лежат в одной календарной неделе Пн–Вс.

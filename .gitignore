@@ -20,6 +20,8 @@ storage/meta.json
 storage/data.json
 storage/auth.json
 storage/filtered.xlsx
+storage/weekly_snapshots/
+storage/zero_sold_state.json
 
 # Логи
 *.log
@@ -30,3 +32,4 @@ test.py
 # IDE / служебные
 /docs
 /.cursor
+.cursorrules
