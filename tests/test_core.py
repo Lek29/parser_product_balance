@@ -553,7 +553,7 @@ def test_run_parse_pipeline_no_alert_when_no_limits(
         "services.zero_sold.run_zero_sold_check_after_parse",
         lambda _items: None,
     )
-    monkeypatch.setattr("services.stock_pipeline.list_all_limits", lambda: {})
+    monkeypatch.setattr("services.stock_pipeline.list_all_limits", dict)
     monkeypatch.setattr(
         "services.stock_pipeline.send_group_limit_alert_html",
         lambda html: sends.append(html),
@@ -590,7 +590,7 @@ def test_revision_skips_when_no_limits(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         "services.group_limit_revision.list_all_limits",
-        lambda: {},
+        dict,
     )
     monkeypatch.setattr(
         "services.group_limit_revision.fetch_and_save",
@@ -607,7 +607,6 @@ def test_local_snapshot_acceptable_last_check_is_today_moscow(
     tmp_path: Path,
 ) -> None:
     from datetime import datetime
-
     from zoneinfo import ZoneInfo
 
     import config
@@ -632,7 +631,6 @@ def test_local_snapshot_acceptable_via_updated_at_meta(
     tmp_path: Path,
 ) -> None:
     from datetime import datetime
-
     from zoneinfo import ZoneInfo
 
     import config

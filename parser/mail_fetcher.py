@@ -785,6 +785,7 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
     ...     print("Данные обновлены")
     """
     from datetime import date as _date
+
     from storage.data_store import (
         check_update_available,
         cleanup_old_data,

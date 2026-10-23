@@ -48,10 +48,10 @@ from bot.keyboards import (
     PARTIAL_REPLY_APPLY_TEXT,
     PARTIAL_REPLY_CANCEL_TEXT,
     START_BUTTON_TEXT,
-    normalize_reply_button_text,
     group_limit_threshold_inline_keyboard,
     groups_reply_keyboard,
     main_keyboard,
+    normalize_reply_button_text,
     parse_group_limit_callback,
     parse_partial_threshold_callback,
     partial_threshold_inline_keyboard,
@@ -71,13 +71,13 @@ from bot.partial_filter_state import (
     get_partial_thresholds,
     get_pending_group_index,
     get_wizard_step,
-    is_known_product_group_reply_text,
     gl_group_index_by_reply_label,
     gl_group_name_by_index,
     group_index_by_reply_label,
     group_name_by_index,
     init_group_limit_session,
     init_partial_session,
+    is_known_product_group_reply_text,
     reset_session_to_global,
     set_gl_pending_group_index,
     set_gl_wizard_step,
@@ -681,8 +681,8 @@ async def cb_get_filtered(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         if filtered_count is None:
             # Счётчик из data.json при отдаче с диска (без тяжёлого parse)
-            from storage.data_store import load_items
             from parser.excel_parser import filter_by_threshold
+            from storage.data_store import load_items
 
             filtered_count = len(filter_by_threshold(load_items()))
 

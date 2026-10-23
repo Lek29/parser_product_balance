@@ -14,7 +14,6 @@ import logging
 import os
 from datetime import datetime, timedelta
 from typing import Final, Literal, Optional
-
 from zoneinfo import ZoneInfo
 
 import config

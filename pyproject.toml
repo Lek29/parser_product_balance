@@ -22,6 +22,8 @@ pythonpath = ["."]
 # Ruff: линтер/форматтер от Astral. Читает этот блок и локально (`uvx ruff`), и в CI.
 [tool.ruff]
 target-version = "py312"
+# 88 мало для русских docstring/логов; 120 закрывает текущие E501 без переноса текстов.
+line-length = 120
 exclude = [
     ".venv",
     "storage",
@@ -29,6 +31,5 @@ exclude = [
     ".git",
 ]
 
-# Дефолтный набор Ruff (E4/E7/E9 + F). Не раздуваем select, пока CI зелёный.
-# Позже можно добавить: "I" (imports), "UP" (pyupgrade), "B" (bugbear).
 [tool.ruff.lint]
+select = ["E", "F", "I", "PIE"]

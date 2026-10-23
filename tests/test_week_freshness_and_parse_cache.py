@@ -128,7 +128,7 @@ def test_run_parse_uses_cache_skips_parse_stock(
         raise AssertionError("parse_stock не должен вызываться при cache hit")
 
     monkeypatch.setattr("services.stock_pipeline.parse_stock", boom_parse)
-    monkeypatch.setattr("services.stock_pipeline.list_all_limits", lambda: {})
+    monkeypatch.setattr("services.stock_pipeline.list_all_limits", dict)
 
     from services.stock_pipeline import run_parse_and_save_filtered
 
