@@ -1,0 +1,15 @@
+name: My First CI
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  hello-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Print success message
+        run: echo "Ура! Мой первый CI/CD скрипт работает!"
