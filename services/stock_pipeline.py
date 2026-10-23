@@ -119,8 +119,7 @@ def send_group_limit_alerts_for_items(
 
     if not alert_html:
         logger.info(
-            "group_limit_check context=%s phase=send result=skipped "
-            "reason=no_message",
+            "group_limit_check context=%s phase=send result=skipped reason=no_message",
             log_context,
         )
         return

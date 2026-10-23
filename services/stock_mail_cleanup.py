@@ -180,9 +180,7 @@ def run_stock_mail_cleanup(*, execute: bool = False) -> int:
             logger.info("%s", line)
 
         if not execute:
-            logger.info(
-                "DRY-RUN: ничего не удалено (execute=False)."
-            )
+            logger.info("DRY-RUN: ничего не удалено (execute=False).")
             return 0
 
         if not to_delete:
@@ -201,4 +199,6 @@ def run_stock_mail_cleanup(*, execute: bool = False) -> int:
             try:
                 imap.logout()
             except Exception:
-                logger.debug("IMAP logout при cleanup завершился с ошибкой", exc_info=True)
+                logger.debug(
+                    "IMAP logout при cleanup завершился с ошибкой", exc_info=True
+                )

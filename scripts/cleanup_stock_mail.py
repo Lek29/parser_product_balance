@@ -56,9 +56,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     try:
         run_stock_mail_cleanup(execute=args.execute)
         if not args.execute:
-            logger.info(
-                "Для удаления: python scripts/cleanup_stock_mail.py --execute"
-            )
+            logger.info("Для удаления: python scripts/cleanup_stock_mail.py --execute")
         return 0
     except Exception:
         logger.exception("Ошибка очистки папки %r", config.EMAIL_IMAP_FOLDER)

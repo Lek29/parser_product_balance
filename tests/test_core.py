@@ -168,9 +168,12 @@ def test_format_group_limit_alerts_html_empty() -> None:
     from services.group_limit_alert_text import format_group_limit_alerts_html
 
     assert format_group_limit_alerts_html([]) is None
-    assert format_group_limit_alerts_html(
-        [{"group": "X", "limit": 1, "positions": []}],
-    ) is None
+    assert (
+        format_group_limit_alerts_html(
+            [{"group": "X", "limit": 1, "positions": []}],
+        )
+        is None
+    )
 
 
 def test_format_group_limit_alerts_html_truncates_omitted_line() -> None:
@@ -318,7 +321,11 @@ def test_read_meta_json_unifies_status_fields(
     meta_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(config, "META_JSON_PATH", str(meta_path))
 
-    from storage.data_store import get_last_email_date_str, get_status_text, read_meta_json
+    from storage.data_store import (
+        get_last_email_date_str,
+        get_status_text,
+        read_meta_json,
+    )
 
     m = read_meta_json()
     assert m is not None

@@ -25,7 +25,6 @@ env ``0`` или отрицательное) окно отключено. Нев
 import email
 import email.message
 import imaplib
-import json
 import logging
 import os
 import re
@@ -90,6 +89,7 @@ class MailFetchOutcome(str, Enum):
 
 try:
     import rarfile
+
     RAR_SUPPORT = True
 except ImportError:
     RAR_SUPPORT = False
@@ -381,9 +381,7 @@ def _select_mail_folder(imap: imaplib.IMAP4_SSL) -> None:
             folder,
             detail or typ,
         )
-        raise RuntimeError(
-            f"Не удалось открыть IMAP-папку {folder!r}: {detail or typ}"
-        )
+        raise RuntimeError(f"Не удалось открыть IMAP-папку {folder!r}: {detail or typ}")
 
 
 def _imap_fetch_payload(fetch_data: Optional[list]) -> Optional[bytes]:
@@ -468,9 +466,7 @@ def collect_stock_archive_candidates(
 
     candidates: List[_StockArchiveCandidate] = []
     today = date.today()
-    max_msg_age = (
-        config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS if apply_age_window else None
-    )
+    max_msg_age = config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS if apply_age_window else None
 
     for msg_id in reversed(msg_ids):
         _, header_data = imap.fetch(msg_id, "(BODY.PEEK[HEADER])")
@@ -678,9 +674,7 @@ def _extract_xlsx_from_archive(archive_path: str) -> Optional[str]:
                     # normpath нормализует разделители пути: ZIP-стандарт
                     # использует "/" внутри имён, на Windows это может
                     # привести к смешанным разделителям без нормализации.
-                    extracted_path = os.path.normpath(
-                        os.path.join(extract_dir, name)
-                    )
+                    extracted_path = os.path.normpath(os.path.join(extract_dir, name))
                     logger.info("Извлечён xlsx из zip: %s", extracted_path)
                     return extracted_path
 
@@ -694,9 +688,7 @@ def _extract_xlsx_from_archive(archive_path: str) -> Optional[str]:
             for name in rf.namelist():
                 if name.lower().endswith(".xlsx"):
                     rf.extract(name, extract_dir)
-                    extracted_path = os.path.normpath(
-                        os.path.join(extract_dir, name)
-                    )
+                    extracted_path = os.path.normpath(os.path.join(extract_dir, name))
                     logger.info("Извлечён xlsx из rar: %s", extracted_path)
                     return extracted_path
 
@@ -804,9 +796,7 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
 
     # Раз в календарную неделю МСК достаточно; дальше работаем с локальным xlsx.
     if not force and is_local_mail_snapshot_fresh_this_week():
-        logger.info(
-            "Локальный снимок свеж (календарная неделя МСК). IMAP пропущен."
-        )
+        logger.info("Локальный снимок свеж (календарная неделя МСК). IMAP пропущен.")
         return MailFetchOutcome.SKIPPED_TODAY
 
     imap = None

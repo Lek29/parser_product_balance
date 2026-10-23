@@ -90,7 +90,9 @@ def _to_map(rows: list[dict]) -> dict[str, dict]:
     return out
 
 
-def find_zero_sold(prev_positions: list[dict], curr_items: list[dict]) -> list[ZeroSoldHit]:
+def find_zero_sold(
+    prev_positions: list[dict], curr_items: list[dict]
+) -> list[ZeroSoldHit]:
     """
     Было qty > 0 → сейчас 0 или позиции нет.
 

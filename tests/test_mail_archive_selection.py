@@ -119,9 +119,7 @@ def test_effective_stock_date_rejects_bad_without_date(
 
     from parser.mail_fetcher import _effective_stock_date
 
-    assert (
-        _effective_stock_date("Остатки от unknown.zip", "") is None
-    )
+    assert _effective_stock_date("Остатки от unknown.zip", "") is None
 
 
 def test_imap_fetch_payload_tuple_ok() -> None:

@@ -190,9 +190,7 @@ async def _notify_telegram_network_unreachable(
 
 # CommandHandler по умолчанию использует только UpdateType.MESSAGES (message / edited_message).
 # В Telegram Business команды приходят в business_message — без этого OR хэндлер не вызывается.
-_COMMAND_FILTERS = (
-    filters.UpdateType.MESSAGES | filters.UpdateType.BUSINESS_MESSAGES
-)
+_COMMAND_FILTERS = filters.UpdateType.MESSAGES | filters.UpdateType.BUSINESS_MESSAGES
 
 
 def _text_message(update: Update) -> Message | None:
@@ -212,16 +210,10 @@ def _text_message(update: Update) -> Message | None:
 
 
 # Текст запроса пароля
-_ASK_PASSWORD_TEXT = (
-    "🔒 *Доступ закрыт*\n\n"
-    "Введите пароль для входа:"
-)
+_ASK_PASSWORD_TEXT = "🔒 *Доступ закрыт*\n\nВведите пароль для входа:"
 
 # Текст для неавторизованных при нажатии кнопок
-_NOT_AUTH_TEXT = (
-    "🔒 Нет доступа.\n\n"
-    "Отправьте /start и введите пароль."
-)
+_NOT_AUTH_TEXT = "🔒 Нет доступа.\n\nОтправьте /start и введите пароль."
 
 # --- Защита от брутфорса ---
 # Количество допустимых неверных попыток до блокировки
@@ -287,7 +279,9 @@ def _record_failed_attempt(chat_id: int) -> int:
         _lockout_until[chat_id] = time.monotonic() + AUTH_LOCKOUT_SECONDS
         logger.warning(
             "Пользователь %d заблокирован на %d сек. после %d неверных попыток.",
-            chat_id, AUTH_LOCKOUT_SECONDS, count,
+            chat_id,
+            AUTH_LOCKOUT_SECONDS,
+            count,
         )
     return count
 
@@ -386,8 +380,7 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         until = _lockout_until.get(chat_id, 0)
         remaining = max(0, int(until - time.monotonic()))
         await msg.reply_text(
-            f"🚫 Слишком много неверных попыток.\n\n"
-            f"Повторите через {remaining} сек."
+            f"🚫 Слишком много неверных попыток.\n\nПовторите через {remaining} сек."
         )
         return
 
@@ -411,8 +404,7 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         remaining_attempts = max(0, MAX_AUTH_ATTEMPTS - count)
         if remaining_attempts > 0:
             await msg.reply_text(
-                f"❌ Неверный пароль. "
-                f"Осталось попыток: {remaining_attempts}."
+                f"❌ Неверный пароль. Осталось попыток: {remaining_attempts}."
             )
         else:
             await msg.reply_text(
@@ -421,7 +413,9 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
         logger.warning(
             "Неверный пароль от пользователя %d (попытка %d/%d).",
-            chat_id, count, MAX_AUTH_ATTEMPTS,
+            chat_id,
+            count,
+            MAX_AUTH_ATTEMPTS,
         )
 
 
@@ -474,7 +468,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await msg.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
-async def handle_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_start_button(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """
     Хэндлер нажатия reply-кнопки «▶️ Start».
 
@@ -491,7 +487,9 @@ async def handle_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE
     """
     msg = _text_message(update)
     if not msg:
-        logger.warning("handle_start_button: нет сообщения (update_id=%s).", update.update_id)
+        logger.warning(
+            "handle_start_button: нет сообщения (update_id=%s).", update.update_id
+        )
         return
 
     chat_id = update.effective_chat.id
@@ -697,10 +695,7 @@ async def cb_get_filtered(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             return
 
         status = get_status_text()
-        caption = (
-            f"📊 {status}\n"
-            f"⚠️ Позиций с малым остатком: *{filtered_count}*"
-        )
+        caption = f"📊 {status}\n⚠️ Позиций с малым остатком: *{filtered_count}*"
 
         await query.edit_message_text("📤 Отправляю файл...")
 
@@ -779,8 +774,7 @@ async def cb_partial_start(
     if not os.path.isfile(config.CURRENT_XLSX_PATH):
         await _edit_callback_message_safe(
             query,
-            "📭 Нет файла остатков.\n\n"
-            "Сначала нажмите «Актуализировать остатки».",
+            "📭 Нет файла остатков.\n\nСначала нажмите «Актуализировать остатки».",
             reply_markup=main_keyboard(),
         )
         return
@@ -801,8 +795,7 @@ async def cb_partial_start(
     if not groups:
         await _edit_callback_message_safe(
             query,
-            "📭 В файле нет товарных групп для фильтра.\n\n"
-            "Актуализируйте остатки.",
+            "📭 В файле нет товарных групп для фильтра.\n\nАктуализируйте остатки.",
             reply_markup=main_keyboard(),
         )
         return
@@ -863,8 +856,7 @@ async def cb_group_limit_start(
     if not os.path.isfile(config.CURRENT_XLSX_PATH):
         await _edit_callback_message_safe(
             query,
-            "📭 Нет файла остатков.\n\n"
-            "Сначала нажмите «Актуализировать остатки».",
+            "📭 Нет файла остатков.\n\nСначала нажмите «Актуализировать остатки».",
             reply_markup=main_keyboard(),
         )
         return
@@ -1182,8 +1174,7 @@ async def _partial_apply(
             return
 
         logger.info(
-            "Частичная выгрузка OK: файл=%s, правил_групп=%d, позиций=%d, "
-            "chat_id=%s",
+            "Частичная выгрузка OK: файл=%s, правил_групп=%d, позиций=%d, chat_id=%s",
             os.path.basename(path),
             len(rules),
             len(filtered),
@@ -1204,8 +1195,7 @@ async def _partial_apply(
 
     except FileNotFoundError:
         await msg.reply_text(
-            "❌ Файл остатков не найден.\n\n"
-            "Сначала «Актуализировать остатки».",
+            "❌ Файл остатков не найден.\n\nСначала «Актуализировать остатки».",
             reply_markup=main_keyboard(),
         )
         reset_session_to_global(context)
@@ -1284,9 +1274,7 @@ async def handle_group_limit_messages(
 
     if step == GroupLimitWizardStep.AWAITING_LIMIT_TEXT:
         idx = get_gl_pending_group_index(context)
-        gname = (
-            gl_group_name_by_index(context, idx) if idx is not None else None
-        )
+        gname = gl_group_name_by_index(context, idx) if idx is not None else None
         if gname is None:
             set_gl_wizard_step(context, GroupLimitWizardStep.GROUPS_LIST)
             clear_gl_pending_group_index(context)
@@ -1351,8 +1339,7 @@ async def handle_group_limit_messages(
     idx = gl_group_index_by_reply_label(context, raw_text)
     if idx is None:
         await msg.reply_text(
-            "Не понял. Выберите группу с клавиатуры "
-            "или «В меню» / «Отмена».",
+            "Не понял. Выберите группу с клавиатуры или «В меню» / «Отмена».",
         )
         raise ApplicationHandlerStop
 
@@ -1533,8 +1520,7 @@ async def handle_partial_messages(
     idx = group_index_by_reply_label(context, raw_text)
     if idx is None:
         await msg.reply_text(
-            "Не понял. Выберите группу с клавиатуры "
-            "или «Применить» / «Отмена».",
+            "Не понял. Выберите группу с клавиатуры или «Применить» / «Отмена».",
         )
         raise ApplicationHandlerStop
 
@@ -1594,9 +1580,13 @@ def register_handlers(app: Application) -> None:
         CallbackQueryHandler(cb_partial_start, pattern=f"^{CB_PARTIAL_START}$"),
     )
     app.add_handler(CallbackQueryHandler(cb_actualize, pattern=f"^{CB_ACTUALIZE}$"))
-    app.add_handler(CallbackQueryHandler(cb_get_filtered, pattern=f"^{CB_GET_FILTERED}$"))
+    app.add_handler(
+        CallbackQueryHandler(cb_get_filtered, pattern=f"^{CB_GET_FILTERED}$")
+    )
     # Reply-кнопка Start — до частичного сценария и пароля
-    app.add_handler(MessageHandler(filters.Regex(f"^{START_BUTTON_TEXT}$"), handle_start_button))
+    app.add_handler(
+        MessageHandler(filters.Regex(f"^{START_BUTTON_TEXT}$"), handle_start_button)
+    )
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,

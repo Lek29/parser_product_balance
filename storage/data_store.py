@@ -203,7 +203,11 @@ def save_items(
     >>> from storage.data_store import save_items
     >>> save_items(parse_stock())
     """
-    fp = source_fingerprint if source_fingerprint is not None else current_xlsx_fingerprint()
+    fp = (
+        source_fingerprint
+        if source_fingerprint is not None
+        else current_xlsx_fingerprint()
+    )
     payload: dict[str, Any] = {
         "updated_at": datetime.now().isoformat(),
         "count": len(items),
@@ -313,7 +317,9 @@ def check_update_available(latest_email_date_str: str) -> bool:
             logger.info("Данные актуальны (сохранённое письмо не старше).")
         return is_newer
     except Exception as e:
-        logger.warning("Не удалось сравнить даты писем: %s. Считаем что обновление нужно.", e)
+        logger.warning(
+            "Не удалось сравнить даты писем: %s. Считаем что обновление нужно.", e
+        )
         return True
 
 
@@ -376,11 +382,7 @@ def _load_auth() -> list[int]:
     except OSError:
         mtime = None
 
-    if (
-        _auth_ids_cache is not None
-        and mtime is not None
-        and _auth_cache_mtime == mtime
-    ):
+    if _auth_ids_cache is not None and mtime is not None and _auth_cache_mtime == mtime:
         return list(_auth_ids_cache)
 
     try:
@@ -510,9 +512,7 @@ def _save_group_stock_limits(limits_by_group: dict[str, int]) -> None:
         group = normalize_top_category_label(str(raw_group))
         limit = int(raw_limit)
         if limit < 0:
-            raise ValueError(
-                f"Лимит для группы {group!r} не может быть отрицательным."
-            )
+            raise ValueError(f"Лимит для группы {group!r} не может быть отрицательным.")
         normalized_limits[group] = limit
 
     payload = {

@@ -165,9 +165,7 @@ def start_keyboard() -> ReplyKeyboardMarkup:
     >>> await message.reply_text("Нажмите Start", reply_markup=markup)
     """
     keyboard = [[KeyboardButton(START_BUTTON_TEXT)]]
-    return ReplyKeyboardMarkup(
-        keyboard, resize_keyboard=True, one_time_keyboard=False
-    )
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 
 def remove_keyboard() -> ReplyKeyboardRemove:
@@ -208,22 +206,30 @@ def main_keyboard() -> InlineKeyboardMarkup:
     >>> await message.reply_text("Выберите действие:", reply_markup=markup)
     """
     keyboard = [
-        [InlineKeyboardButton(
-            "🔄 Актуализировать остатки",
-            callback_data=CB_ACTUALIZE,
-        )],
-        [InlineKeyboardButton(
-            "📥 Получить отфильтрованные остатки",
-            callback_data=CB_GET_FILTERED,
-        )],
-        [InlineKeyboardButton(
-            "🔀 Частичная фильтрация",
-            callback_data=CB_PARTIAL_START,
-        )],
-        [InlineKeyboardButton(
-            "🎚 Лимиты по группам",
-            callback_data=CB_GROUP_LIMIT_START,
-        )],
+        [
+            InlineKeyboardButton(
+                "🔄 Актуализировать остатки",
+                callback_data=CB_ACTUALIZE,
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📥 Получить отфильтрованные остатки",
+                callback_data=CB_GET_FILTERED,
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔀 Частичная фильтрация",
+                callback_data=CB_PARTIAL_START,
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🎚 Лимиты по группам",
+                callback_data=CB_GROUP_LIMIT_START,
+            )
+        ],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -266,10 +272,12 @@ def groups_reply_keyboard(
     if row:
         keyboard.append(row)
 
-    keyboard.append([
-        KeyboardButton(footer_done_text),
-        KeyboardButton(footer_cancel_text),
-    ])
+    keyboard.append(
+        [
+            KeyboardButton(footer_done_text),
+            KeyboardButton(footer_cancel_text),
+        ]
+    )
 
     return ReplyKeyboardMarkup(
         keyboard,
@@ -308,9 +316,11 @@ def partial_threshold_inline_keyboard(
         rows.append(current)
 
     custom_cb = f"{PARTIAL_THRESHOLD_CB_PREFIX}:{group_index}:x"
-    rows.append([
-        InlineKeyboardButton("✏️ Свой порог", callback_data=custom_cb),
-    ])
+    rows.append(
+        [
+            InlineKeyboardButton("✏️ Свой порог", callback_data=custom_cb),
+        ]
+    )
 
     return InlineKeyboardMarkup(rows)
 

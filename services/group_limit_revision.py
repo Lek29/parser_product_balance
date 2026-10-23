@@ -94,8 +94,7 @@ def local_snapshot_acceptable_for_limit_revision(
     today_msk = ref.date().isoformat()
     if get_last_check_date() == today_msk:
         logger.info(
-            "Ревизия лимитов: локальный снимок OK "
-            "(last_check_date == сегодня МСК).",
+            "Ревизия лимитов: локальный снимок OK (last_check_date == сегодня МСК).",
         )
         return True
 
@@ -103,8 +102,7 @@ def local_snapshot_acceptable_for_limit_revision(
     raw = meta.get("updated_at")
     if not raw or not isinstance(raw, str):
         logger.info(
-            "Ревизия лимитов: нет updated_at в meta — "
-            "локальный снимок не принят.",
+            "Ревизия лимитов: нет updated_at в meta — локальный снимок не принят.",
         )
         return False
     try:

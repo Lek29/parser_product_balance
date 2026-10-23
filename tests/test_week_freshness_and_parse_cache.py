@@ -47,7 +47,9 @@ def test_local_snapshot_fresh_same_week(
     xlsx.write_bytes(b"PK\x03\x04fake")
     meta = tmp_path / "meta.json"
     meta.write_text(
-        json.dumps({"last_check_date": "2026-10-21", "updated_at": "2026-10-21T10:00:00"}),
+        json.dumps(
+            {"last_check_date": "2026-10-21", "updated_at": "2026-10-21T10:00:00"}
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(config, "CURRENT_XLSX_PATH", str(xlsx))

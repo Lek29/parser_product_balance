@@ -18,3 +18,17 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+# Ruff: линтер/форматтер от Astral. Читает этот блок и локально (`uvx ruff`), и в CI.
+[tool.ruff]
+target-version = "py312"
+exclude = [
+    ".venv",
+    "storage",
+    "temp",
+    ".git",
+]
+
+# Дефолтный набор Ruff (E4/E7/E9 + F). Не раздуваем select, пока CI зелёный.
+# Позже можно добавить: "I" (imports), "UP" (pyupgrade), "B" (bugbear).
+[tool.ruff.lint]

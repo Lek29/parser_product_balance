@@ -63,10 +63,12 @@ async def post_init(app: Application) -> None:
         me.id,
         me.can_join_groups,
     )
-    await app.bot.set_my_commands([
-        BotCommand("start", "Запустить / Главное меню"),
-        BotCommand("help",  "Справка по боту"),
-    ])
+    await app.bot.set_my_commands(
+        [
+            BotCommand("start", "Запустить / Главное меню"),
+            BotCommand("help", "Справка по боту"),
+        ]
+    )
     logger.info("Команды бота зарегистрированы в меню Telegram.")
 
 

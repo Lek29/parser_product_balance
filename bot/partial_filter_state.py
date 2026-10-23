@@ -181,9 +181,7 @@ def init_partial_session(context: Any, groups: list[str]) -> None:
     set_filter_mode(context, FilterMode.PARTIAL_FILTER)
     context.user_data[UD_PARTIAL_GROUPS_ORDER] = list(groups)
     context.user_data[UD_PARTIAL_THRESHOLDS] = {}
-    context.user_data[UD_PARTIAL_WIZARD_STEP] = (
-        PartialWizardStep.GROUPS_LIST.value
-    )
+    context.user_data[UD_PARTIAL_WIZARD_STEP] = PartialWizardStep.GROUPS_LIST.value
     context.user_data.pop(UD_PARTIAL_PENDING_GROUP_INDEX, None)
 
 
@@ -203,9 +201,7 @@ def init_group_limit_session(context: Any, groups: list[str]) -> None:
     clear_partial_draft(context)
     set_filter_mode(context, FilterMode.GROUP_LIMIT_SETUP)
     context.user_data[UD_GL_GROUPS_ORDER] = list(groups)
-    context.user_data[UD_GL_WIZARD_STEP] = (
-        GroupLimitWizardStep.GROUPS_LIST.value
-    )
+    context.user_data[UD_GL_WIZARD_STEP] = GroupLimitWizardStep.GROUPS_LIST.value
     context.user_data.pop(UD_GL_PENDING_GROUP_INDEX, None)
 
 

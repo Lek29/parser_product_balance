@@ -108,7 +108,7 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
             start=HEADER_ROWS + 1,
         ):
             cell_name = row[0]  # колонка A
-            cell_qty = row[3]   # колонка D
+            cell_qty = row[3]  # колонка D
             cell_price = row[4]  # колонка E
 
             name = cell_name.value
@@ -152,14 +152,16 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
                     )
                     continue
 
-                items.append({
-                    "top_category": context.get(4.0, ""),
-                    "subcategory": context.get(6.0, ""),
-                    "brand": context.get(8.0, ""),
-                    "name": name,
-                    "quantity": qty,
-                    "price": price,
-                })
+                items.append(
+                    {
+                        "top_category": context.get(4.0, ""),
+                        "subcategory": context.get(6.0, ""),
+                        "brand": context.get(8.0, ""),
+                        "name": name,
+                        "quantity": qty,
+                        "price": price,
+                    }
+                )
 
         logger.info("Всего товарных позиций в файле: %d", len(items))
         return items
@@ -203,7 +205,9 @@ def list_product_groups(xlsx_path: Optional[str] = None) -> list[str]:
     >>> # ['Аксессуары', 'Велосипеды', ...]
     """
     items = parse_stock(xlsx_path)
-    labels = {normalize_top_category_label(item.get("top_category", "")) for item in items}
+    labels = {
+        normalize_top_category_label(item.get("top_category", "")) for item in items
+    }
     return sorted(labels, key=lambda s: s.casefold())
 
 
@@ -442,15 +446,21 @@ def generate_filtered_xlsx(
     ws.sheet_properties.outlinePr.summaryBelow = False
 
     # --- Стили ---
-    col_header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    col_header_fill = PatternFill(
+        start_color="1F4E79", end_color="1F4E79", fill_type="solid"
+    )
     col_header_font = Font(bold=True, color="FFFFFF", size=11)
 
     cat_fill = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")
     cat_font = Font(bold=True, color="FFFFFF", size=11)
 
-    row_fill_even = PatternFill(start_color="DEEAF1", end_color="DEEAF1", fill_type="solid")
-    row_fill_odd  = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-    red_fill      = PatternFill(start_color="FFE0E0", end_color="FFE0E0", fill_type="solid")
+    row_fill_even = PatternFill(
+        start_color="DEEAF1", end_color="DEEAF1", fill_type="solid"
+    )
+    row_fill_odd = PatternFill(
+        start_color="FFFFFF", end_color="FFFFFF", fill_type="solid"
+    )
+    red_fill = PatternFill(start_color="FFE0E0", end_color="FFE0E0", fill_type="solid")
 
     col_widths = [40, 20, 12, 12]
     # Ширина колонки «Наименование» в символах — используется для расчёта высоты строк
@@ -485,7 +495,9 @@ def generate_filtered_xlsx(
         group_list = list(group)
 
         # --- Строка заголовка категории ---
-        cat_cell = ws.cell(row=current_row, column=1, value=f"  {category}  ({len(group_list)} поз.)")
+        cat_cell = ws.cell(
+            row=current_row, column=1, value=f"  {category}  ({len(group_list)} поз.)"
+        )
         cat_cell.font = cat_font
         cat_cell.fill = cat_fill
         cat_cell.alignment = Alignment(vertical="center")
@@ -545,5 +557,9 @@ def generate_filtered_xlsx(
     ws.freeze_panes = "A2"
 
     wb.save(path)
-    logger.info("Отфильтрованный xlsx с группировкой сохранён: %s (%d позиций)", path, len(items))
+    logger.info(
+        "Отфильтрованный xlsx с группировкой сохранён: %s (%d позиций)",
+        path,
+        len(items),
+    )
     return path

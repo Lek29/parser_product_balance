@@ -36,9 +36,7 @@ EMAIL_IMAP_SERVER: str = _require("EMAIL_IMAP_SERVER")
 # Префикс stem архива остатков (без учёта регистра в mail_fetcher).
 # Смена шаблона имени у отправителя: env и/или парсер даты в mail_fetcher
 # (_parse_date_after_stock_prefix, _RE_STOCK_*).
-MAIL_STOCK_ARCHIVE_PREFIX: str = os.getenv(
-    "MAIL_STOCK_ARCHIVE_PREFIX", "Остатки от "
-)
+MAIL_STOCK_ARCHIVE_PREFIX: str = os.getenv("MAIL_STOCK_ARCHIVE_PREFIX", "Остатки от ")
 
 
 def _email_imap_folder() -> str:
@@ -141,9 +139,7 @@ CURRENT_XLSX_PATH: str = os.path.join(STORAGE_DIR, "current.xlsx")
 # Глобальный filtered.xlsx: планировщик, актуализация, «Получить…».
 FILTERED_XLSX_PATH: str = os.path.join(STORAGE_DIR, "filtered.xlsx")
 # Частичная выгрузка; планировщик (scheduler) этот путь не использует.
-FILTERED_PARTIAL_XLSX_PATH: str = os.path.join(
-    STORAGE_DIR, "filtered_partial.xlsx"
-)
+FILTERED_PARTIAL_XLSX_PATH: str = os.path.join(STORAGE_DIR, "filtered_partial.xlsx")
 META_JSON_PATH: str = os.path.join(STORAGE_DIR, "meta.json")
 DATA_JSON_PATH: str = os.path.join(STORAGE_DIR, "data.json")
 AUTH_JSON_PATH: str = os.path.join(STORAGE_DIR, "auth.json")
@@ -152,6 +148,4 @@ GROUP_STOCK_LIMITS_JSON_PATH: str = os.path.join(
     "group_stock_limits.json",
 )
 WEEKLY_SNAPSHOTS_DIR: str = os.path.join(STORAGE_DIR, "weekly_snapshots")
-ZERO_SOLD_STATE_JSON_PATH: str = os.path.join(
-    STORAGE_DIR, "zero_sold_state.json"
-)
+ZERO_SOLD_STATE_JSON_PATH: str = os.path.join(STORAGE_DIR, "zero_sold_state.json")
