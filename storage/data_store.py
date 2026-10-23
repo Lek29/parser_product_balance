@@ -62,12 +62,140 @@ def atomic_write_json(path: str, obj: Any, **dump_kwargs: Any) -> None:
         raise
 
 
-def save_items(items: list[dict]) -> None:
+def current_xlsx_fingerprint() -> Optional[tuple[float, int]]:
+    """
+    Снимает отпечаток ``storage/current.xlsx`` (mtime + size) для кэша парсинга.
+
+    :returns: ``(st_mtime, st_size)`` или ``None``, если файла нет.
+    :rtype: Optional[tuple[float, int]]
+    """
+    path = config.CURRENT_XLSX_PATH
+    if not os.path.isfile(path):
+        return None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (float(st.st_mtime), int(st.st_size))
+
+
+def load_data_json_payload() -> Optional[dict[str, Any]]:
+    """
+    Читает корневой объект ``storage/data.json`` целиком.
+
+    :returns: Словарь или ``None``, если файла нет / JSON битый / корень не object.
+    :rtype: Optional[dict[str, Any]]
+    """
+    if not os.path.exists(config.DATA_JSON_PATH):
+        return None
+    try:
+        with open(config.DATA_JSON_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except json.JSONDecodeError as e:
+        logger.error("data.json повреждён (load_data_json_payload): %s", e)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def data_json_matches_current_xlsx() -> bool:
+    """
+    Проверяет, что ``data.json`` соответствует текущему ``current.xlsx`` по отпечатку.
+
+    Нужны поля ``source_xlsx_mtime`` и ``source_xlsx_size``, записанные при
+    последнем полном :func:`save_items`.
+
+    :returns: ``True``, если отпечатки совпадают и в JSON есть непустой ``items``.
+    :rtype: bool
+    """
+    fp = current_xlsx_fingerprint()
+    if fp is None:
+        return False
+    payload = load_data_json_payload()
+    if payload is None:
+        return False
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return False
+    try:
+        mtime = float(payload["source_xlsx_mtime"])
+        size = int(payload["source_xlsx_size"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return mtime == fp[0] and size == fp[1]
+
+
+def filtered_xlsx_ready_for_send() -> bool:
+    """
+    Готов ли глобальный ``filtered.xlsx`` к отправке без повторного парсинга.
+
+    Условие: файл существует, непустой, и ``data.json`` валиден относительно
+    ``current.xlsx`` (тот же отпечаток, что после пайплайна).
+
+    :returns: ``True``, если можно отдать файл с диска как есть.
+    :rtype: bool
+    """
+    path = config.FILTERED_XLSX_PATH
+    if not os.path.isfile(path):
+        return False
+    try:
+        if os.path.getsize(path) <= 0:
+            return False
+    except OSError:
+        return False
+    return data_json_matches_current_xlsx()
+
+
+def is_local_mail_snapshot_fresh_this_week(
+    *,
+    reference: Optional[datetime] = None,
+) -> bool:
+    """
+    Локальный снимок достаточно свеж, чтобы не ходить на IMAP (календарная неделя МСК).
+
+    Условия:
+    * существует ``current.xlsx``;
+    * в ``meta.json`` есть ``last_check_date`` или ``updated_at``, дата которого
+      попадает в ту же неделю Пн–Вс (Europe/Moscow), что и ``reference``.
+
+    :param reference: Точка «сейчас» (для тестов); по умолчанию Москва сейчас.
+    :type reference: Optional[datetime]
+    :returns: ``True``, если IMAP можно пропустить.
+    :rtype: bool
+    """
+    from services.calendar_week import (
+        parse_meta_date,
+        same_calendar_week,
+        today_moscow,
+    )
+
+    if not os.path.isfile(config.CURRENT_XLSX_PATH):
+        return False
+    meta = read_meta_json()
+    if meta is None:
+        return False
+    anchor = parse_meta_date(meta.get("last_check_date"))
+    if anchor is None:
+        anchor = parse_meta_date(meta.get("updated_at"))
+    if anchor is None:
+        return False
+    return same_calendar_week(anchor, today_moscow(reference))
+
+
+def save_items(
+    items: list[dict],
+    *,
+    source_fingerprint: Optional[tuple[float, int]] = None,
+) -> None:
     """
     Сохраняет список всех товарных позиций в storage/data.json.
 
     :param items: Полный список товарных позиций из parse_stock().
     :type items: list[dict]
+    :param source_fingerprint: Отпечаток ``current.xlsx`` ``(mtime, size)``;
+        если ``None`` — снимается с диска на момент записи (если файл есть).
+    :type source_fingerprint: Optional[tuple[float, int]]
     :returns: None
 
     :example:
@@ -75,11 +203,15 @@ def save_items(items: list[dict]) -> None:
     >>> from storage.data_store import save_items
     >>> save_items(parse_stock())
     """
-    payload = {
+    fp = source_fingerprint if source_fingerprint is not None else current_xlsx_fingerprint()
+    payload: dict[str, Any] = {
         "updated_at": datetime.now().isoformat(),
         "count": len(items),
         "items": items,
     }
+    if fp is not None:
+        payload["source_xlsx_mtime"] = fp[0]
+        payload["source_xlsx_size"] = fp[1]
     atomic_write_json(config.DATA_JSON_PATH, payload, indent=2)
     logger.info("Сохранено %d позиций в %s", len(items), config.DATA_JSON_PATH)
 
@@ -95,21 +227,13 @@ def load_items() -> list[dict]:
     :returns: Список позиций или пустой список если файл не существует.
     :rtype: list[dict]
     """
-    if not os.path.exists(config.DATA_JSON_PATH):
-        logger.warning("data.json не найден, возвращаем пустой список.")
+    payload = load_data_json_payload()
+    if payload is None:
+        if not os.path.exists(config.DATA_JSON_PATH):
+            logger.warning("data.json не найден, возвращаем пустой список.")
         return []
-    try:
-        with open(config.DATA_JSON_PATH, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-    except json.JSONDecodeError as e:
-        logger.error(
-            "data.json повреждён (load_items): %s. Возвращаем пустой список.",
-            e,
-        )
-        return []
-    if not isinstance(payload, dict):
-        return []
-    return payload.get("items", [])
+    items = payload.get("items", [])
+    return items if isinstance(items, list) else []
 
 
 def read_meta_json() -> Optional[dict[str, Any]]:

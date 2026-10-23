@@ -74,7 +74,9 @@ class MailFetchOutcome(str, Enum):
     """
     Результат :func:`fetch_and_save`: явные семантики вместо ``Optional[bool]``.
 
-    :cvar SKIPPED_TODAY: IMAP не вызывался — сегодня уже была проверка (при ``force=False``).
+    :cvar SKIPPED_TODAY: IMAP не вызывался — локальный снимок свеж в рамках
+        календарной недели Пн–Вс (Europe/Moscow) при ``force=False``.
+        Имя значения историческое (раньше — «сегодня»).
     :cvar NO_CHANGES: Почта проверена, новых данных нет (нет письма или дата не новее сохранённой).
     :cvar UPDATED: Новый архив скачан, ``current.xlsx`` и meta обновлены.
     :cvar ARCHIVE_FAILURE: Ошибка скачивания вложения или извлечения .xlsx (не путать с NO_CHANGES).
@@ -427,54 +429,35 @@ def _imap_fetch_payload(fetch_data: Optional[list]) -> Optional[bytes]:
     return None
 
 
-def _find_latest_archive_attachment(
+def collect_stock_archive_candidates(
     imap: imaplib.IMAP4_SSL,
-) -> Tuple[Optional[email.message.Message], Optional[str], Optional[str]]:
+    *,
+    apply_age_window: bool = True,
+) -> List[_StockArchiveCandidate]:
     """
-    Ищет в настроенной IMAP-папке (:data:`config.EMAIL_IMAP_FOLDER`) одно вложение —
-    архив остатков (.zip / .rar) с подходящим именем.
+    Собирает кандидатов-архивов остатков в :data:`config.EMAIL_IMAP_FOLDER`.
 
-    Учитываются только файлы, у которых основа имени начинается с
-    :data:`config.MAIL_STOCK_ARCHIVE_PREFIX` (сравнение без учёта регистра).
-    Из всех таких вложений по всем письмам выбирается архив с максимальной датой
-    в имени (форматы ``DD.MM.YYYY`` или ``YYYY-MM-DD`` сразу после префикса).
-    Если дату из имени извлечь нельзя, для сортировки используется дата из
-    заголовка ``Date`` (с предупреждением в логе); при невалидном ``Date``
-    кандидат отбрасывается.
+    Двухфазный обход (HEADER → при multipart RFC822). При
+    ``apply_age_window=True`` и заданном :data:`config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS`
+    обход может прерваться на письмах старше окна (см.
+    :func:`_scan_should_stop_before_rfc822`). Для очистки ящика передавайте
+    ``apply_age_window=False``, иначе старые письма не попадут в список.
 
-    При равной эффективной дате выбирается более новое письмо по ``Date``, затем
-    больший IMAP ``msg_id``, затем лексикографически большее имя файла.
-
-    .. note:: Технический долг (см. ``docs/refactoring-plan2.md`` §B.6): при очень
-       большом числе писем в папке полный перебор ID может быть медленным. Возможные меры
-       (после замеров): ограничение глубины, отдельная папка только с остатками,
-       UID SEARCH по дате.
-
-    Двухфазный обход (трафик):
-
-    - Фаза 1: ``BODY.PEEK[HEADER]`` — отсев не-multipart.
-    - Если задано :data:`config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS` (положительное ``N``),
-      по заголовку ``Date`` письма при multipart: при однозначном превышении возраста
-      ``N`` календарных дней обход **прерывается** без ``RFC822`` для этого и более
-      старых писем. Битый ``Date`` или дата в будущем не дают раннего выхода
-      (тело подгружается); см. :func:`_scan_should_stop_before_rfc822`.
-    - Фаза 2: ``RFC822`` для multipart — сбор всех кандидатов с подходящим именем.
-
-    :param imap: Авторизованный IMAP объект.
+    :param imap: Авторизованный IMAP объект (папка ещё не выбрана — SELECT внутри).
     :type imap: imaplib.IMAP4_SSL
-    :returns: Кортеж (сообщение, имя архива, заголовок Date выбранного письма).
-              Все ``None``, если подходящих вложений нет (результат для
-              :func:`fetch_and_save` — ``NO_CHANGES``, без подмены чужим архивом).
-    :rtype: Tuple[Optional[email.message.Message], Optional[str], Optional[str]]
+    :param apply_age_window: Включить ранний выход по возрасту письма.
+    :type apply_age_window: bool
+    :returns: Список кандидатов (может быть пустым).
+    :rtype: List[_StockArchiveCandidate]
     """
     _select_mail_folder(imap)
     folder = config.EMAIL_IMAP_FOLDER
     _, msg_ids_raw = imap.search(None, "ALL")
-    msg_ids = msg_ids_raw[0].split()
+    msg_ids = msg_ids_raw[0].split() if msg_ids_raw and msg_ids_raw[0] else []
 
     if not msg_ids:
         logger.warning("Папка IMAP %r пуста.", folder)
-        return None, None, None
+        return []
 
     logger.info(
         "Найдено писем в папке %r: %d. Сбор архивов остатков (префикс «%s»)...",
@@ -485,10 +468,11 @@ def _find_latest_archive_attachment(
 
     candidates: List[_StockArchiveCandidate] = []
     today = date.today()
-    max_msg_age = config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS
+    max_msg_age = (
+        config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS if apply_age_window else None
+    )
 
     for msg_id in reversed(msg_ids):
-        # Фаза 1: загружаем только заголовки — дёшево (~2-5 КБ на письмо)
         _, header_data = imap.fetch(msg_id, "(BODY.PEEK[HEADER])")
         header_bytes = _imap_fetch_payload(header_data)
         if header_bytes is None:
@@ -497,7 +481,6 @@ def _find_latest_archive_attachment(
         headers = email.message_from_bytes(header_bytes)
         content_type = headers.get("Content-Type", "").lower()
 
-        # Вложения возможны только в multipart-письмах
         if "multipart" not in content_type:
             continue
 
@@ -522,7 +505,6 @@ def _find_latest_archive_attachment(
             )
             break
 
-        # Фаза 2: письмо многочастное — загружаем полностью
         _, msg_data = imap.fetch(msg_id, "(RFC822)")
         msg_bytes = _imap_fetch_payload(msg_data)
         if msg_bytes is None:
@@ -576,6 +558,43 @@ def _find_latest_archive_attachment(
                 src,
                 date_str,
             )
+
+    return candidates
+
+
+def _find_latest_archive_attachment(
+    imap: imaplib.IMAP4_SSL,
+) -> Tuple[Optional[email.message.Message], Optional[str], Optional[str]]:
+    """
+    Ищет в настроенной IMAP-папке (:data:`config.EMAIL_IMAP_FOLDER`) одно вложение —
+    архив остатков (.zip / .rar) с подходящим именем.
+
+    Учитываются только файлы, у которых основа имени начинается с
+    :data:`config.MAIL_STOCK_ARCHIVE_PREFIX` (сравнение без учёта регистра).
+    Из всех таких вложений по всем письмам выбирается архив с максимальной датой
+    в имени (форматы ``DD.MM.YYYY`` или ``YYYY-MM-DD`` сразу после префикса).
+    Если дату из имени извлечь нельзя, для сортировки используется дата из
+    заголовка ``Date`` (с предупреждением в логе); при невалидном ``Date``
+    кандидат отбрасывается.
+
+    При равной эффективной дате выбирается более новое письмо по ``Date``, затем
+    больший IMAP ``msg_id``, затем лексикографически большее имя файла.
+
+    .. note:: Технический долг (см. ``docs/refactoring-plan2.md`` §B.6): при очень
+       большом числе писем в папке полный перебор ID может быть медленным. Возможные меры
+       (после замеров): ограничение глубины, отдельная папка только с остатками,
+       UID SEARCH по дате.
+
+    Двухфазный обход — см. :func:`collect_stock_archive_candidates`.
+
+    :param imap: Авторизованный IMAP объект.
+    :type imap: imaplib.IMAP4_SSL
+    :returns: Кортеж (сообщение, имя архива, заголовок Date выбранного письма).
+              Все ``None``, если подходящих вложений нет (результат для
+              :func:`fetch_and_save` — ``NO_CHANGES``, без подмены чужим архивом).
+    :rtype: Tuple[Optional[email.message.Message], Optional[str], Optional[str]]
+    """
+    candidates = collect_stock_archive_candidates(imap, apply_age_window=True)
 
     if not candidates:
         logger.warning(
@@ -735,12 +754,13 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
     - ``UPDATED`` — данные успешно обновлены (новое письмо скачано и сохранено)
     - ``NO_CHANGES`` — IMAP проверен, нет архива с префиксом остатков в имени, либо
       дата выбранного письма не новее сохранённой в ``meta.json``
-    - ``SKIPPED_TODAY`` — IMAP не вызывался, т.к. сегодня уже была проверка (``force=False``)
+    - ``SKIPPED_TODAY`` — IMAP не вызывался: локальный снимок свеж в календарной
+      неделе Пн–Вс МСК (``force=False``)
     - ``ARCHIVE_FAILURE`` — не удалось скачать вложение или извлечь .xlsx из архива
 
     Логика ветвления (упрощённо):
-    1. Если ``not force`` и сегодня уже была проверка и есть ``current.xlsx`` —
-       возвращает ``SKIPPED_TODAY`` (IMAP не вызывается).
+    1. Если ``not force`` и :func:`storage.data_store.is_local_mail_snapshot_fresh_this_week`
+       — ``SKIPPED_TODAY`` (IMAP не вызывается).
     2. Подключение к IMAP, поиск последнего письма с архивом.
     3. Писем с архивом нет — ``set_last_check_date(today)``, возврат ``NO_CHANGES``.
     4. Письмо есть, но дата не новее сохранённой в ``meta.json`` —
@@ -755,7 +775,7 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
     загрузки/распаковки архива ``last_check_date`` не обновляется, чтобы
     следующий запрос снова обратился к IMAP.
 
-    :param force: Если True — игнорирует last_check_date, всегда идёт на IMAP.
+    :param force: Если True — игнорирует свежесть недели, всегда идёт на IMAP.
     :type force: bool
     :returns: Элемент :class:`MailFetchOutcome`.
     :rtype: MailFetchOutcome
@@ -764,7 +784,7 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
     :example:
     >>> result = fetch_and_save()
     >>> if result == MailFetchOutcome.SKIPPED_TODAY:
-    ...     print("Сегодня уже проверялось, IMAP пропущен")
+    ...     print("На этой неделе уже свежий локальный снимок, IMAP пропущен")
     >>> elif result == MailFetchOutcome.NO_CHANGES:
     ...     print("Проверили почту, новых писем нет")
     >>> elif result == MailFetchOutcome.ARCHIVE_FAILURE:
@@ -776,17 +796,17 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
     from storage.data_store import (
         check_update_available,
         cleanup_old_data,
-        get_last_check_date,
+        is_local_mail_snapshot_fresh_this_week,
         set_last_check_date,
     )
 
     today = _date.today().isoformat()
 
-    # Защита от частых запросов к почте.
-    # Пропускаем IMAP только если сегодня уже проверяли И файл с данными существует.
-    # Если current.xlsx отсутствует — идём на почту в любом случае.
-    if not force and get_last_check_date() == today and os.path.exists(config.CURRENT_XLSX_PATH):
-        logger.info("Почта уже проверялась сегодня (%s). IMAP пропущен.", today)
+    # Раз в календарную неделю МСК достаточно; дальше работаем с локальным xlsx.
+    if not force and is_local_mail_snapshot_fresh_this_week():
+        logger.info(
+            "Локальный снимок свеж (календарная неделя МСК). IMAP пропущен."
+        )
         return MailFetchOutcome.SKIPPED_TODAY
 
     imap = None

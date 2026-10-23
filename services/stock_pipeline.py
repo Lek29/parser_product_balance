@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import logging
+import os
 
+import config
+from bot.telegram_bridge import send_group_limit_alert_html
 from parser.excel_parser import (
     filter_by_threshold,
     find_group_limit_violations,
@@ -15,9 +18,14 @@ from parser.excel_parser import (
     normalize_top_category_label,
     parse_stock,
 )
-from bot.telegram_bridge import send_group_limit_alert_html
 from services.group_limit_alert_text import format_group_limit_alerts_html
-from storage.data_store import list_all_limits, save_items
+from storage.data_store import (
+    current_xlsx_fingerprint,
+    data_json_matches_current_xlsx,
+    list_all_limits,
+    load_items,
+    save_items,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +147,11 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
     Файл остатков уже должен быть на месте (после успешного
     :func:`parser.mail_fetcher.fetch_and_save`).
 
-    Порядок намеренно последователен: сначала полный снимок в JSON, затем
+    Если ``data.json`` уже соответствует отпечатку текущего ``current.xlsx``
+    (mtime+size), повторный ``parse_stock`` не выполняется: берутся items из
+    JSON; ``filtered.xlsx`` пересобирается только если файла нет.
+
+    Порядок при полном прогоне: сначала полный снимок в JSON, затем
     фильтрация и запись ``filtered.xlsx``, чтобы при сбое генерации Excel
     в ``data.json`` уже лежал актуальный полный список (удобно для отладки).
 
@@ -147,10 +159,29 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
     :rtype: tuple[int, int]
     :side effects: Обновляет ``data.json`` и ``filtered.xlsx`` в ``storage/``.
                    Лимиты по группам — через
-                   :func:`send_group_limit_alerts_for_items`.
+                   :func:`send_group_limit_alerts_for_items` (только при полном парсе).
     """
+    if data_json_matches_current_xlsx():
+        all_items = load_items()
+        filtered = filter_by_threshold(all_items)
+        if not os.path.isfile(config.FILTERED_XLSX_PATH):
+            generate_filtered_xlsx(filtered)
+            logger.info(
+                "Кэш парсинга: data.json совпал с current.xlsx; "
+                "пересобран отсутствующий filtered.xlsx (%d поз.).",
+                len(filtered),
+            )
+        else:
+            logger.info(
+                "Кэш парсинга: data.json совпал с current.xlsx; "
+                "parse_stock пропущен (%d поз.).",
+                len(all_items),
+            )
+        return len(all_items), len(filtered)
+
+    fp = current_xlsx_fingerprint()
     all_items = parse_stock()
-    save_items(all_items)
+    save_items(all_items, source_fingerprint=fp)
     filtered = filter_by_threshold(all_items)
     generate_filtered_xlsx(filtered)
 

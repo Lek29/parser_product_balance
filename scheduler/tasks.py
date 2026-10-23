@@ -2,13 +2,14 @@
 Планировщик задач приложения.
 
 Использует APScheduler (BackgroundScheduler) для еженедельного автоматического
-получения и обработки остатков с корпоративной почты и отдельной еженедельной
-ревизии порогов по группам (``docs/fourty_role.md``, этап 7а).
+получения и обработки остатков с корпоративной почты, очистки IMAP-папки Stock
+и ревизии порогов по группам (``docs/fourty_role.md``, этап 7а).
 
-Расписание:
+Расписание (Europe/Moscow):
 
-* понедельник 09:00 МСК — полный цикл почты и парсинга (:func:`fetch_and_parse`);
-* четверг 10:00 МСК — ревизия лимитов (:func:`weekly_group_limit_revision`).
+* понедельник 09:00 — полный цикл почты и парсинга (:func:`fetch_and_parse`);
+* понедельник 09:30 — очистка лишних писем в Stock (:func:`weekly_stock_mail_cleanup`);
+* четверг 10:00 — ревизия лимитов (:func:`weekly_group_limit_revision`).
 
 Частичная выгрузка (``filtered_partial.xlsx``) планировщиком **не** создаётся:
 пишется только глобальный ``filtered.xlsx`` (см. :func:`fetch_and_parse`).
@@ -48,7 +49,8 @@ def fetch_and_parse() -> None:
 
         if outcome == MailFetchOutcome.SKIPPED_TODAY:
             logger.info(
-                "Планировщик: IMAP пропущен — почта уже проверялась сегодня."
+                "Планировщик: IMAP пропущен — локальный снимок свеж "
+                "(календарная неделя МСК)."
             )
             return
 
@@ -101,13 +103,41 @@ def weekly_group_limit_revision() -> None:
         )
 
 
+def weekly_stock_mail_cleanup() -> None:
+    """
+    Задача планировщика: очистка IMAP-папки Stock (реально удаляет лишнее).
+
+    Делегирует :func:`services.stock_mail_cleanup.run_stock_mail_cleanup`
+    с ``execute=True``. Запускается после еженедельного fetch, чтобы keeper
+    уже мог быть свежим письмом недели.
+
+    :returns: None
+    :rtype: None
+    :side effects: Удаляет письма на IMAP-сервере.
+    """
+    logger.info("Планировщик: запуск задачи weekly_stock_mail_cleanup.")
+    try:
+        from services.stock_mail_cleanup import run_stock_mail_cleanup
+
+        deleted = run_stock_mail_cleanup(execute=True)
+        logger.info(
+            "Планировщик: очистка Stock завершена, удалено писем: %d.",
+            deleted,
+        )
+    except Exception as e:
+        logger.error(
+            "Планировщик: ошибка при weekly_stock_mail_cleanup: %s",
+            e,
+            exc_info=True,
+        )
+
+
 def create_scheduler() -> BackgroundScheduler:
     """
-    Создаёт и настраивает экземпляр BackgroundScheduler с задачами обновления
-    остатков и ревизии лимитов по группам.
+    Создаёт и настраивает экземпляр BackgroundScheduler с еженедельными задачами.
 
-    Расписание: понедельник 09:00 и четверг 10:00 (timezone Europe/Moscow).
-    Планировщик запускается в фоновом потоке и не блокирует основной процесс.
+    Расписание (Europe/Moscow): пн 09:00 fetch, пн 09:30 cleanup Stock,
+    чт 10:00 ревизия лимитов. Планировщик в фоновом потоке, не блокирует бота.
 
     :returns: Настроенный, но ещё не запущенный экземпляр BackgroundScheduler.
     :rtype: BackgroundScheduler
@@ -135,6 +165,20 @@ def create_scheduler() -> BackgroundScheduler:
     )
 
     scheduler.add_job(
+        func=weekly_stock_mail_cleanup,
+        trigger=CronTrigger(
+            day_of_week="mon",
+            hour=9,
+            minute=30,
+            timezone="Europe/Moscow",
+        ),
+        id="stock_mail_cleanup_weekly",
+        name="Еженедельная очистка IMAP Stock",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+    scheduler.add_job(
         func=weekly_group_limit_revision,
         trigger=CronTrigger(
             day_of_week="thu",
@@ -150,6 +194,7 @@ def create_scheduler() -> BackgroundScheduler:
 
     logger.info(
         "Планировщик создан. Задачи: пн 09:00 — остатки с почты; "
+        "пн 09:30 — очистка Stock; "
         "чт 10:00 — ревизия лимитов по группам (этап 7а).",
     )
     return scheduler

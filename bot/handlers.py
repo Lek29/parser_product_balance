@@ -556,23 +556,43 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         outcome = fetch_and_save()
 
-        # SKIPPED_TODAY — IMAP не вызывался, сегодня уже проверялось
+        from services.stock_pipeline import run_parse_and_save_filtered
+
+        # SKIPPED_TODAY — IMAP не вызывался: снимок свеж в календарной неделе МСК
         if outcome == MailFetchOutcome.SKIPPED_TODAY:
+            await query.edit_message_text(
+                "⏳ Локальные данные этой недели — сверяю кэш таблицы..."
+            )
+            all_count, filtered_count = run_parse_and_save_filtered()
+            reset_session_to_global(context)
             status = get_status_text()
             from storage.data_store import get_last_check_date
 
-            check_date = get_last_check_date() or "сегодня"
+            check_date = get_last_check_date() or "—"
             await query.edit_message_text(
-                f"✅ Сегодня ({check_date}) уже проверялось.\n\n📊 {status}",
+                f"✅ На этой неделе почта уже не нужна "
+                f"(проверка: {check_date}).\n"
+                f"Работаем с локальным файлом.\n\n"
+                f"📊 {status}\n"
+                f"📦 Позиций: `{all_count}` · малый остаток: `{filtered_count}`",
+                parse_mode=ParseMode.MARKDOWN,
                 reply_markup=main_keyboard(),
             )
             return
 
         # NO_CHANGES — IMAP проверен, нового письма нет
         if outcome == MailFetchOutcome.NO_CHANGES:
+            await query.edit_message_text(
+                "⏳ Новых писем нет — сверяю локальный кэш таблицы..."
+            )
+            all_count, filtered_count = run_parse_and_save_filtered()
+            reset_session_to_global(context)
             status = get_status_text()
             await query.edit_message_text(
-                f"✅ Проверено. Новых данных нет.\n\n📊 {status}",
+                f"✅ Проверено. Новых данных на почте нет.\n\n"
+                f"📊 {status}\n"
+                f"📦 Позиций: `{all_count}` · малый остаток: `{filtered_count}`",
+                parse_mode=ParseMode.MARKDOWN,
                 reply_markup=main_keyboard(),
             )
             return
@@ -586,8 +606,6 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 reply_markup=main_keyboard(),
             )
             return
-
-        from services.stock_pipeline import run_parse_and_save_filtered
 
         await query.edit_message_text("⏳ Обрабатываю таблицу...")
 
@@ -637,14 +655,40 @@ async def cb_get_filtered(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(_NOT_AUTH_TEXT)
         return
 
-    await query.edit_message_text("⏳ Формирую файл...")
+    await query.edit_message_text("⏳ Готовлю файл...")
 
     try:
-        from parser.excel_parser import generate_filtered_xlsx, get_filtered_items
+        from storage.data_store import filtered_xlsx_ready_for_send
 
-        filtered = get_filtered_items()
+        xlsx_path = config.FILTERED_XLSX_PATH
+        filtered_count: int | None = None
 
-        if not filtered:
+        if filtered_xlsx_ready_for_send():
+            # P1/3B: отдаём готовый filtered.xlsx без повторного parse_stock
+            logger.info("Отправка готового filtered.xlsx без повторного парсинга.")
+        else:
+            from parser.excel_parser import generate_filtered_xlsx, get_filtered_items
+
+            await query.edit_message_text("⏳ Формирую файл...")
+            filtered = get_filtered_items()
+            if not filtered:
+                await query.edit_message_text(
+                    f"📭 Товаров с остатком ≤ {config.STOCK_THRESHOLD} шт. не найдено.\n\n"
+                    "Попробуйте сначала актуализировать остатки.",
+                    reply_markup=main_keyboard(),
+                )
+                return
+            xlsx_path = generate_filtered_xlsx(filtered)
+            filtered_count = len(filtered)
+
+        if filtered_count is None:
+            # Счётчик из data.json при отдаче с диска (без тяжёлого parse)
+            from storage.data_store import load_items
+            from parser.excel_parser import filter_by_threshold
+
+            filtered_count = len(filter_by_threshold(load_items()))
+
+        if filtered_count == 0:
             await query.edit_message_text(
                 f"📭 Товаров с остатком ≤ {config.STOCK_THRESHOLD} шт. не найдено.\n\n"
                 "Попробуйте сначала актуализировать остатки.",
@@ -652,12 +696,10 @@ async def cb_get_filtered(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             return
 
-        xlsx_path = generate_filtered_xlsx(filtered)
-
         status = get_status_text()
         caption = (
             f"📊 {status}\n"
-            f"⚠️ Позиций с малым остатком: *{len(filtered)}*"
+            f"⚠️ Позиций с малым остатком: *{filtered_count}*"
         )
 
         await query.edit_message_text("📤 Отправляю файл...")

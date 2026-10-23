@@ -446,7 +446,14 @@ def test_run_parse_pipeline_single_telegram_send_for_multiple_groups(
     sends: list[str] = []
 
     monkeypatch.setattr("services.stock_pipeline.parse_stock", lambda: items)
-    monkeypatch.setattr("services.stock_pipeline.save_items", lambda _x: None)
+    monkeypatch.setattr(
+        "services.stock_pipeline.data_json_matches_current_xlsx",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "services.stock_pipeline.save_items",
+        lambda _x, **_kw: None,
+    )
     monkeypatch.setattr(
         "services.stock_pipeline.filter_by_threshold",
         lambda _x: [],
@@ -483,7 +490,14 @@ def test_run_parse_pipeline_no_alert_when_no_limits(
         "services.stock_pipeline.parse_stock",
         lambda: [{"top_category": "X", "name": "n", "quantity": 1}],
     )
-    monkeypatch.setattr("services.stock_pipeline.save_items", lambda _x: None)
+    monkeypatch.setattr(
+        "services.stock_pipeline.data_json_matches_current_xlsx",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "services.stock_pipeline.save_items",
+        lambda _x, **_kw: None,
+    )
     monkeypatch.setattr(
         "services.stock_pipeline.filter_by_threshold",
         lambda _x: [],
