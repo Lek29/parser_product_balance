@@ -54,10 +54,6 @@ def fetch_and_parse() -> None:
             )
             return
 
-        if outcome == MailFetchOutcome.NO_CHANGES:
-            logger.info("Планировщик: IMAP проверен, новых писем нет.")
-            return
-
         if outcome == MailFetchOutcome.ARCHIVE_FAILURE:
             logger.error(
                 "Планировщик: MAIL_FETCH_ARCHIVE_FAILURE — скачивание или "
@@ -65,7 +61,12 @@ def fetch_and_parse() -> None:
             )
             return
 
+        # NO_CHANGES / UPDATED: парсим локальный xlsx (нужно для zero-sold на границе недели).
+        # shortcut: при SKIPPED_TODAY выше return — в начале новой недели skip не срабатывает.
         from services.stock_pipeline import run_parse_and_save_filtered
+
+        if outcome == MailFetchOutcome.NO_CHANGES:
+            logger.info("Планировщик: IMAP без новых писем — локальный parse.")
 
         all_count, filtered_count = run_parse_and_save_filtered()
 

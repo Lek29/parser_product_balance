@@ -1,45 +1,42 @@
 """
-Детектор позиций, ушедших в ноль между календарными неделями (K1, A+B).
+Zero-sold: снимок недели → diff с прошлой → xlsx в личку (K1, A+B).
 
 См. ``docs/push_message_about_zero.md``.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Optional
 
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+
 import config
 from parser.excel_parser import normalize_top_category_label
 from services.calendar_week import (
+    now_moscow,
     previous_week_monday,
     today_moscow,
     week_monday,
 )
-from storage.data_store import atomic_write_json, current_xlsx_fingerprint
+from storage.data_store import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
 Reason = Literal["zero", "missing"]
+_REASON_LABEL = {"zero": "явный ноль", "missing": "нет в файле"}
 
 
 @dataclass(frozen=True)
 class ZeroSoldHit:
-    """
-    Одна позиция, ушедшая в ноль относительно прошлой недели.
+    """Позиция: на прошлой неделе qty > 0, сейчас 0 или строки нет."""
 
-    :ivar key: Ключ K1.
-    :ivar group: Товарная группа.
-    :ivar brand: Бренд.
-    :ivar name: Наименование.
-    :ivar qty_was: Количество на прошлой неделе (> 0).
-    :ivar reason: ``zero`` — явный 0; ``missing`` — строки нет.
-    """
-
-    key: str
     group: str
     brand: str
     name: str
@@ -49,80 +46,63 @@ class ZeroSoldHit:
 
 def make_position_key(item: dict) -> str:
     """
-    Ключ позиции K1: группа + бренд + название (casefold/strip).
+    Ключ K1: группа + бренд + название (casefold/strip).
 
-    :param item: Словарь позиции из ``parse_stock``.
+    :param item: Позиция ``parse_stock`` (``top_category``) или снимок (``group``).
     :type item: dict
-    :returns: Стабильный строковый ключ.
+    :returns: Стабильный ключ.
     :rtype: str
     """
-    group = normalize_top_category_label(str(item.get("top_category", "") or ""))
+    raw_group = item.get("top_category")
+    if raw_group is None:
+        raw_group = item.get("group", "")
+    group = normalize_top_category_label(str(raw_group or ""))
     brand = str(item.get("brand") or "").strip().casefold()
     name = str(item.get("name") or "").strip().casefold()
     return f"{group.casefold()}|{brand}|{name}"
 
 
-def _positions_to_map(positions: list[dict]) -> dict[str, dict]:
-    """
-    Строит map key → position; при дубликатах берёт max quantity.
-
-    :param positions: Список словарей с полем ``key`` или сырые items.
-    :type positions: list[dict]
-    :returns: Словарь по ключу.
-    :rtype: dict[str, dict]
-    """
+def _to_map(rows: list[dict]) -> dict[str, dict]:
+    """key → {group, brand, name, quantity}; дубликаты — max qty."""
     out: dict[str, dict] = {}
-    for raw in positions:
-        if "key" in raw and "quantity" in raw:
+    for raw in rows:
+        try:
+            qty = int(raw.get("quantity"))
+        except (TypeError, ValueError):
+            continue
+        # снимок уже с key/group; parse_stock — top_category
+        if raw.get("key") is not None and "top_category" not in raw:
             key = str(raw["key"])
-            try:
-                qty = int(raw["quantity"])
-            except (TypeError, ValueError):
-                continue
-            entry = {
-                "key": key,
-                "group": str(raw.get("group") or ""),
-                "brand": str(raw.get("brand") or ""),
-                "name": str(raw.get("name") or ""),
-                "quantity": qty,
-            }
+            group = str(raw.get("group") or "")
+            brand = str(raw.get("brand") or "")
+            name = str(raw.get("name") or "")
         else:
             key = make_position_key(raw)
-            try:
-                qty = int(raw.get("quantity"))
-            except (TypeError, ValueError):
-                continue
-            entry = {
-                "key": key,
-                "group": normalize_top_category_label(
-                    str(raw.get("top_category", "") or "")
-                ),
-                "brand": str(raw.get("brand") or "").strip(),
-                "name": str(raw.get("name") or "").strip(),
-                "quantity": qty,
-            }
+            group = normalize_top_category_label(str(raw.get("top_category", "") or ""))
+            brand = str(raw.get("brand") or "").strip()
+            name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        entry = {"group": group, "brand": brand, "name": name, "quantity": qty}
         prev = out.get(key)
         if prev is None or qty > int(prev["quantity"]):
             out[key] = entry
     return out
 
 
-def find_zero_sold(
-    prev_positions: list[dict],
-    curr_items: list[dict],
-) -> list[ZeroSoldHit]:
+def find_zero_sold(prev_positions: list[dict], curr_items: list[dict]) -> list[ZeroSoldHit]:
     """
-    Находит позиции с прошлой недели (qty > 0), ставшие 0 или пропавшие.
+    Было qty > 0 → сейчас 0 или позиции нет.
 
     :param prev_positions: Позиции снимка прошлой недели.
     :type prev_positions: list[dict]
-    :param curr_items: Текущий результат ``parse_stock``.
+    :param curr_items: Текущий ``parse_stock``.
     :type curr_items: list[dict]
-    :returns: Список hit'ов, отсортированный по группе/имени.
+    :returns: Hit'ы, сортировка по группе/имени.
     :rtype: list[ZeroSoldHit]
     """
-    prev_map = _positions_to_map(prev_positions)
-    curr_map = _positions_to_map(curr_items)
+    prev_map = _to_map(prev_positions)
+    curr_map = _to_map(curr_items)
     hits: list[ZeroSoldHit] = []
     for key, prev in prev_map.items():
         qty_was = int(prev["quantity"])
@@ -131,7 +111,6 @@ def find_zero_sold(
         if key not in curr_map:
             hits.append(
                 ZeroSoldHit(
-                    key=key,
                     group=prev["group"],
                     brand=prev["brand"],
                     name=prev["name"],
@@ -139,12 +118,9 @@ def find_zero_sold(
                     reason="missing",
                 )
             )
-            continue
-        curr_qty = int(curr_map[key]["quantity"])
-        if curr_qty == 0:
+        elif int(curr_map[key]["quantity"]) == 0:
             hits.append(
                 ZeroSoldHit(
-                    key=key,
                     group=prev["group"],
                     brand=prev["brand"],
                     name=prev["name"],
@@ -156,152 +132,139 @@ def find_zero_sold(
     return hits
 
 
-def load_zero_sold_state() -> dict[str, Any]:
-    """
-    Читает ``storage/zero_sold_state.json``.
+def _snapshot_path(week_id: str) -> str:
+    return os.path.join(config.WEEKLY_SNAPSHOTS_DIR, f"{week_id.strip()}.json")
 
-    :returns: Словарь состояния или пустой dict.
-    :rtype: dict[str, Any]
-    """
-    import json
 
+def _save_week_snapshot(week_id: str, items: list[dict]) -> None:
+    """Пишет снимок недели из parse_stock items."""
+    by_key = _to_map(items)
+    positions = [
+        {
+            "key": k,
+            "group": v["group"],
+            "brand": v["brand"],
+            "name": v["name"],
+            "quantity": v["quantity"],
+        }
+        for k, v in by_key.items()
+    ]
+    os.makedirs(config.WEEKLY_SNAPSHOTS_DIR, exist_ok=True)
+    atomic_write_json(
+        _snapshot_path(week_id),
+        {
+            "week_id": week_id,
+            "saved_at": now_moscow().isoformat(),
+            "positions": positions,
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
+    logger.info("zero_sold snapshot week_id=%s n=%d", week_id, len(positions))
+
+
+def _load_week_snapshot(week_id: str) -> Optional[dict[str, Any]]:
+    path = _snapshot_path(week_id)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.error("zero_sold snapshot read fail %s: %s", path, e)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _load_state() -> dict[str, Any]:
     path = config.ZERO_SOLD_STATE_JSON_PATH
     if not os.path.isfile(path):
         return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        logger.error("zero_sold_state повреждён: %s", e)
+    except (OSError, json.JSONDecodeError):
         return {}
     return data if isinstance(data, dict) else {}
 
 
-def save_zero_sold_state(
-    *,
-    week_from: str,
-    week_to: str,
-    n_hits: int,
-    filename: Optional[str] = None,
-) -> None:
-    """
-    Пишет идемпотентное состояние последнего сравнения недель.
-
-    :param week_from: Пн прошлой недели.
-    :type week_from: str
-    :param week_to: Пн текущей недели.
-    :type week_to: str
-    :param n_hits: Число позиций в отчёте.
-    :type n_hits: int
-    :param filename: Имя отправленного файла или ``None``.
-    :type filename: Optional[str]
-    :returns: None
-    :side effects: Обновляет ``zero_sold_state.json``.
-    """
-    payload: dict[str, Any] = {
-        "last_compared_from": week_from,
-        "last_compared_to": week_to,
-        "n_hits": n_hits,
-        "pushed_at": datetime.now().isoformat(),
-    }
-    if filename:
-        payload["filename"] = filename
+def _save_state(week_from: str, week_to: str) -> None:
     atomic_write_json(
         config.ZERO_SOLD_STATE_JSON_PATH,
-        payload,
+        {
+            "last_compared_from": week_from,
+            "last_compared_to": week_to,
+            "pushed_at": datetime.now().isoformat(),
+        },
         indent=2,
         ensure_ascii=False,
     )
 
 
-def already_pushed_for_weeks(week_from: str, week_to: str) -> bool:
-    """
-    Проверяет, был ли уже push/сравнение для пары недель.
-
-    :param week_from: Пн прошлой недели.
-    :type week_from: str
-    :param week_to: Пн текущей недели.
-    :type week_to: str
-    :returns: ``True``, если пара уже обработана.
-    :rtype: bool
-    """
-    state = load_zero_sold_state()
-    return (
-        state.get("last_compared_from") == week_from
-        and state.get("last_compared_to") == week_to
-    )
+def _write_xlsx(hits: list[ZeroSoldHit], path: str) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Ушли в 0"
+    fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    font = Font(bold=True, color="FFFFFF", size=11)
+    headers = ["Группа", "Бренд", "Наименование", "Было (шт.)", "Стало", "Причина"]
+    for col, title in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col, value=title)
+        cell.fill = fill
+        cell.font = font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    for row_idx, hit in enumerate(hits, start=2):
+        vals = [
+            hit.group,
+            hit.brand,
+            hit.name,
+            hit.qty_was,
+            "0" if hit.reason == "zero" else "—",
+            _REASON_LABEL[hit.reason],
+        ]
+        for col, value in enumerate(vals, start=1):
+            ws.cell(row=row_idx, column=col, value=value)
+    for i, w in enumerate([28, 16, 48, 12, 10, 16], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    wb.save(path)
 
 
 def run_zero_sold_check_after_parse(all_items: list[dict]) -> None:
     """
-    Хук после полного парса: снимок недели, diff с прошлой, xlsx в личку.
+    Хук после полного парса: снимок → diff → xlsx в ``STOCK_LIMIT_ALERT_CHAT_ID``.
 
-    Ошибки глотаются (лог), чтобы не ронять пайплайн остатков.
-
-    :param all_items: Актуальный список позиций после ``parse_stock``.
+    :param all_items: Результат ``parse_stock``.
     :type all_items: list[dict]
     :returns: None
-    :side effects: JSON-снимки, state, temp xlsx, Telegram ``send_document``.
+    :side effects: snapshots, state, temp xlsx, Telegram document.
     """
     try:
-        _run_zero_sold_check_after_parse_impl(all_items)
+        _run(all_items)
     except Exception:
-        logger.error(
-            "zero_sold phase=fail result=unexpected_error",
-            exc_info=True,
-        )
+        logger.error("zero_sold fail", exc_info=True)
 
 
-def _run_zero_sold_check_after_parse_impl(all_items: list[dict]) -> None:
-    """
-    Внутренняя реализация :func:`run_zero_sold_check_after_parse` без try/except.
-
-    :param all_items: Позиции текущего parse.
-    :type all_items: list[dict]
-    :returns: None
-    """
+def _run(all_items: list[dict]) -> None:
     from bot.telegram_bridge import send_zero_sold_xlsx
-    from services.zero_sold_report import generate_zero_sold_xlsx
-    from storage.weekly_stock_snapshot import (
-        build_snapshot_from_items,
-        load_week_snapshot,
-        save_week_snapshot,
-    )
 
     today = today_moscow()
-    week_to_d = week_monday(today)
-    week_from_d = previous_week_monday(today)
-    week_to = week_to_d.isoformat()
-    week_from = week_from_d.isoformat()
+    week_to = week_monday(today).isoformat()
+    week_from = previous_week_monday(today).isoformat()
 
-    fp = current_xlsx_fingerprint()
-    mtime = fp[0] if fp else None
-    payload = build_snapshot_from_items(
-        all_items, week_id=week_to, source_xlsx_mtime=mtime
-    )
-    save_week_snapshot(week_to, payload)
+    _save_week_snapshot(week_to, all_items)
 
-    if already_pushed_for_weeks(week_from, week_to):
-        logger.info(
-            "zero_sold phase=skip reason=already_compared "
-            "week_from=%s week_to=%s",
-            week_from,
-            week_to,
-        )
+    state = _load_state()
+    if (
+        state.get("last_compared_from") == week_from
+        and state.get("last_compared_to") == week_to
+    ):
+        logger.info("zero_sold skip already_compared %s→%s", week_from, week_to)
         return
 
-    prev = load_week_snapshot(week_from)
+    prev = _load_week_snapshot(week_from)
     if prev is None:
-        logger.info(
-            "zero_sold phase=skip reason=no_prev_snapshot week_from=%s week_to=%s",
-            week_from,
-            week_to,
-        )
-        # Не фиксируем state: когда появится prev, сравним; но без prev
-        # повторные прогоны этой недели снова skip по no_prev — ок.
-        # Чтобы не долбить лог каждую актуализацию без prev — всё же
-        # помечаем «сравнили с пустым» только если хотим тишины.
-        # План: нет prev → no-op без state. Оставляем без state.
+        logger.info("zero_sold skip no_prev week_from=%s", week_from)
         return
 
     prev_positions = prev.get("positions") or []
@@ -309,49 +272,24 @@ def _run_zero_sold_check_after_parse_impl(all_items: list[dict]) -> None:
         prev_positions = []
 
     hits = find_zero_sold(prev_positions, all_items)
-    logger.info(
-        "zero_sold phase=compare week_from=%s week_to=%s n_hits=%d",
-        week_from,
-        week_to,
-        len(hits),
-    )
+    logger.info("zero_sold compare %s→%s n_hits=%d", week_from, week_to, len(hits))
 
     if not hits:
-        save_zero_sold_state(week_from=week_from, week_to=week_to, n_hits=0)
-        logger.info("zero_sold phase=send result=skipped reason=no_hits")
+        _save_state(week_from, week_to)
         return
 
-    report_date = today.isoformat()
-    filename = f"ушли_в_ноль_{report_date}.xlsx"
+    filename = f"ушли_в_ноль_{today.isoformat()}.xlsx"
     path = os.path.join(config.TEMP_DIR, filename)
-    os.makedirs(config.TEMP_DIR, exist_ok=True)
-    generate_zero_sold_xlsx(hits, path)
-
+    _write_xlsx(hits, path)
     caption = (
         f"Ушли в 0 относительно прошлой недели "
         f"({week_from} → {week_to}): {len(hits)} поз."
     )
     sent = send_zero_sold_xlsx(path, caption=caption, filename=filename)
     if sent:
-        save_zero_sold_state(
-            week_from=week_from,
-            week_to=week_to,
-            n_hits=len(hits),
-            filename=filename,
-        )
-        logger.info(
-            "zero_sold phase=send result=ok n_hits=%d file=%s",
-            len(hits),
-            filename,
-        )
-    else:
-        logger.warning(
-            "zero_sold phase=send result=fail n_hits=%d — state не обновлён",
-            len(hits),
-        )
-
+        _save_state(week_from, week_to)
     try:
         if os.path.isfile(path):
             os.remove(path)
     except OSError:
-        logger.debug("Не удалось удалить temp zero-sold xlsx", exc_info=True)
+        pass

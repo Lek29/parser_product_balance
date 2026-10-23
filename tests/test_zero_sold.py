@@ -10,10 +10,10 @@ import openpyxl
 
 from services.zero_sold import (
     ZeroSoldHit,
+    _write_xlsx,
     find_zero_sold,
     make_position_key,
 )
-from services.zero_sold_report import generate_zero_sold_xlsx
 
 
 def _item(
@@ -106,11 +106,10 @@ def test_find_zero_sold_empty_prev() -> None:
     assert find_zero_sold([], [_item("G", "B", "N", 0)]) == []
 
 
-def test_generate_zero_sold_xlsx(tmp_path: Path) -> None:
+def test_write_xlsx(tmp_path: Path) -> None:
     """Файл создаётся с ожидаемыми заголовками и строкой."""
     hits = [
         ZeroSoldHit(
-            key="k",
             group="Группа",
             brand="Brand",
             name="Товар",
@@ -119,7 +118,7 @@ def test_generate_zero_sold_xlsx(tmp_path: Path) -> None:
         )
     ]
     out = tmp_path / "ушли_в_ноль_2026-10-23.xlsx"
-    generate_zero_sold_xlsx(hits, str(out))
+    _write_xlsx(hits, str(out))
     assert out.is_file()
     wb = openpyxl.load_workbook(out)
     ws = wb.active

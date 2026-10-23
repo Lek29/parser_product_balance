@@ -122,26 +122,10 @@ def _optional_int_env(key: str) -> Optional[int]:
 
 # Уведомления о порогах по группе (docs/fourty_role.md).
 # Не задано — отправка алертов пропускается.
+# Личка: пороги по группам + xlsx «ушли в ноль» (docs/push_message_about_zero.md).
 STOCK_LIMIT_ALERT_CHAT_ID: Optional[int] = _optional_int_env(
     "STOCK_LIMIT_ALERT_CHAT_ID"
 )
-# Личка для zero-sold xlsx (docs/push_message_about_zero.md).
-# Пусто — fallback на STOCK_LIMIT_ALERT_CHAT_ID.
-ZERO_SOLD_ALERT_CHAT_ID: Optional[int] = _optional_int_env(
-    "ZERO_SOLD_ALERT_CHAT_ID"
-)
-
-
-def resolve_zero_sold_alert_chat_id() -> Optional[int]:
-    """
-    Chat id для push «ушли в ноль»: отдельный env или fallback на лимит-алерт.
-
-    :returns: Целый Telegram chat id или ``None``, если оба env не заданы.
-    :rtype: Optional[int]
-    """
-    if ZERO_SOLD_ALERT_CHAT_ID is not None:
-        return ZERO_SOLD_ALERT_CHAT_ID
-    return STOCK_LIMIT_ALERT_CHAT_ID
 
 # --- Параметры фильтрации ---
 STOCK_THRESHOLD: int = int(os.getenv("STOCK_THRESHOLD", "5"))

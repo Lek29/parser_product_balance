@@ -113,7 +113,7 @@ def send_zero_sold_xlsx(
     filename: str,
 ) -> bool:
     """
-    Отправляет xlsx «ушли в ноль» в личку (:func:`config.resolve_zero_sold_alert_chat_id`).
+    Отправляет xlsx «ушли в ноль» в личку (``STOCK_LIMIT_ALERT_CHAT_ID``).
 
     :param path: Локальный путь к файлу ``.xlsx``.
     :type path: str
@@ -125,11 +125,11 @@ def send_zero_sold_xlsx(
     :rtype: bool
     :side effects: HTTP ``sendDocument`` в цикле polling.
     """
-    chat_id = config.resolve_zero_sold_alert_chat_id()
+    chat_id = config.STOCK_LIMIT_ALERT_CHAT_ID
     if chat_id is None:
         logger.warning(
-            "Telegram bridge: chat id для zero-sold не задан "
-            "(ZERO_SOLD_ALERT_CHAT_ID / STOCK_LIMIT_ALERT_CHAT_ID) — файл не отправлен.",
+            "Telegram bridge: STOCK_LIMIT_ALERT_CHAT_ID не задан — "
+            "zero-sold xlsx не отправлен.",
         )
         return False
 

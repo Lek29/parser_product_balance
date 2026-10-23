@@ -120,8 +120,7 @@ STOCK_THRESHOLD=5
 | `MAIL_IMAP_MAX_MESSAGE_AGE_DAYS` | ❌ | Окно по дате письма в днях для обхода; по умолчанию `7`; `0` или меньше — перебор всей папки |
 | `MAIL_STOCK_ARCHIVE_PREFIX` | ❌ | Префикс имени вложения с остатками; по умолчанию `Остатки от ` |
 | `STOCK_THRESHOLD` | ❌ | Порог малого остатка, по умолчанию `5` |
-| `STOCK_LIMIT_ALERT_CHAT_ID` | ❌ | Целый Telegram `chat_id` для уведомлений о порогах по группам; не задан — алерты не отправляются |
-| `ZERO_SOLD_ALERT_CHAT_ID` | ❌ | Личный chat id для xlsx «ушли в ноль» (`docs/push_message_about_zero.md`); пусто — тот же, что `STOCK_LIMIT_ALERT_CHAT_ID` |
+| `STOCK_LIMIT_ALERT_CHAT_ID` | ❌ | Личный Telegram chat id: пороги по группам + xlsx «ушли в ноль»; не задан — оба канала выключены |
 
 ### Почта: папка IMAP и окно по дате письма
 
