@@ -1,0 +1,21 @@
+name: My First CI
+
+# Указываем, когда запускать скрипт (при каждом push в ветку main)
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  hello-job:
+    # Выделяем виртуальный сервер Ubuntu от GitHub (это бесплатно)
+    runs-on: ubuntu-latest
+
+    steps:
+      # Шаг 1: Скачать ваш код на виртуальный сервер
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Шаг 2: Выполнить простую тестовую команду
+      - name: Print success message
+        run: echo "Ура! Мой первый CI/CD скрипт работает!"
