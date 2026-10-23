@@ -122,3 +122,33 @@ def test_effective_stock_date_rejects_bad_without_date(
     assert (
         _effective_stock_date("Остатки от unknown.zip", "") is None
     )
+
+
+def test_imap_fetch_payload_tuple_ok() -> None:
+    """Нормальный FETCH с literal — возвращает bytes payload."""
+    from parser.mail_fetcher import _imap_fetch_payload
+
+    payload = b"From: a@b.c\r\n\r\n"
+    data = [(b"1 (BODY[HEADER] {18}", payload), b")"]
+    assert _imap_fetch_payload(data) == payload
+
+
+def test_imap_fetch_payload_bare_bytes_is_none() -> None:
+    """Ответ без literal (голые bytes) — None, не int через индексацию."""
+    from parser.mail_fetcher import _imap_fetch_payload
+
+    # Раньше data[0][1] давал int и message_from_bytes падал с decode.
+    data = [b"1 (BODY[HEADER] NIL)"]
+    assert _imap_fetch_payload(data) is None
+    assert isinstance(data[0][1], int)
+
+
+def test_imap_fetch_payload_empty_and_bad() -> None:
+    """Пустой/битый ответ FETCH — None."""
+    from parser.mail_fetcher import _imap_fetch_payload
+
+    assert _imap_fetch_payload(None) is None
+    assert _imap_fetch_payload([]) is None
+    assert _imap_fetch_payload([None]) is None
+    assert _imap_fetch_payload([(b"meta", 42)]) is None
+    assert _imap_fetch_payload([(b"meta",)]) is None

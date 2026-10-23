@@ -87,6 +87,61 @@ def test_parse_group_limit_callback() -> None:
     assert parse_group_limit_callback("bad") is None
 
 
+def test_is_known_product_group_reply_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Текст совпадает с группой из list_product_groups (патч без xlsx)."""
+    import bot.partial_filter_state as pfs
+
+    monkeypatch.setattr(
+        "parser.excel_parser.list_product_groups",
+        lambda xlsx_path=None: ["Альпинизм", "VELO"],
+    )
+    assert pfs.is_known_product_group_reply_text("Альпинизм") is True
+    assert pfs.is_known_product_group_reply_text("velo") is True
+    assert pfs.is_known_product_group_reply_text("NoSuchGroup") is False
+
+
+def test_group_index_by_reply_label_casefold_latin() -> None:
+    """Латинское имя группы совпадает с reply-текстом без учёта регистра."""
+    from types import SimpleNamespace
+
+    from bot.partial_filter_state import (
+        UD_PARTIAL_GROUPS_ORDER,
+        group_index_by_reply_label,
+    )
+
+    ctx = SimpleNamespace(
+        user_data={UD_PARTIAL_GROUPS_ORDER: ["VELO", "Альпинизм"]},
+    )
+    assert group_index_by_reply_label(ctx, "velo") == 0
+    assert group_index_by_reply_label(ctx, "Альпинизм") == 1
+
+
+def test_normalize_reply_button_text_strips_variation_selector() -> None:
+    """Emoji «✅» с U+FE0F сравнивается с константой без него."""
+    from bot.keyboards import (
+        PARTIAL_REPLY_APPLY_TEXT,
+        normalize_reply_button_text,
+    )
+
+    with_vs16 = "✅\ufe0f Применить"
+    assert normalize_reply_button_text(with_vs16) == normalize_reply_button_text(
+        PARTIAL_REPLY_APPLY_TEXT,
+    )
+
+
+def test_normalize_reply_button_text_nbsp_like_apply() -> None:
+    """Неразрывный пробел между emoji и словом — как у обычного пробела."""
+    from bot.keyboards import (
+        PARTIAL_REPLY_APPLY_TEXT,
+        normalize_reply_button_text,
+    )
+
+    nbsp = "✅\u00a0Применить"
+    assert normalize_reply_button_text(nbsp) == normalize_reply_button_text(
+        PARTIAL_REPLY_APPLY_TEXT,
+    )
+
+
 def test_format_group_limit_alerts_html_basic_and_escape() -> None:
     """HTML-алерт: заголовок группы, список, экранирование спецсимволов."""
     from services.group_limit_alert_text import format_group_limit_alerts_html

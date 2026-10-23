@@ -18,14 +18,16 @@
 - Счётчики хранятся в памяти (сбрасываются при перезапуске бота).
 """
 
+import asyncio
 import hmac
 import logging
 import os
 import time
+from html import escape as html_escape
 
-from telegram import Message, Update
+from telegram import Message, ReplyKeyboardRemove, Update
 from telegram.constants import ParseMode
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError, TelegramError
 from telegram.ext import (
     Application,
     ApplicationHandlerStop,
@@ -46,6 +48,7 @@ from bot.keyboards import (
     PARTIAL_REPLY_APPLY_TEXT,
     PARTIAL_REPLY_CANCEL_TEXT,
     START_BUTTON_TEXT,
+    normalize_reply_button_text,
     group_limit_threshold_inline_keyboard,
     groups_reply_keyboard,
     main_keyboard,
@@ -68,6 +71,7 @@ from bot.partial_filter_state import (
     get_partial_thresholds,
     get_pending_group_index,
     get_wizard_step,
+    is_known_product_group_reply_text,
     gl_group_index_by_reply_label,
     gl_group_name_by_index,
     group_index_by_reply_label,
@@ -114,6 +118,75 @@ async def _edit_callback_message_safe(query, text: str, **kwargs: object) -> Non
             logger.debug("edit_message_text: содержимое не изменилось, пропуск.")
             return
         raise
+
+
+async def _answer_callback_query_safe(
+    query,
+    *,
+    max_attempts: int = 3,
+) -> bool:
+    """
+    Отвечает на callback query с повтором при :class:`telegram.error.NetworkError`.
+
+    Сбои TLS/прокси к ``api.telegram.org`` иначе рвут хэндлер на первой строке,
+    пользователь видит «тишину» и крутящийся индикатор у кнопки.
+
+    :param query: Объект ``CallbackQuery``.
+    :param max_attempts: Число попыток с паузой между ними.
+    :returns: ``True`` если ответ принят API; иначе ``False``.
+    """
+    last_err: BaseException | None = None
+    for attempt in range(max_attempts):
+        try:
+            await query.answer()
+            return True
+        except NetworkError as e:
+            last_err = e
+            logger.warning(
+                "answer_callback_query: сеть (попытка %d/%d): %s",
+                attempt + 1,
+                max_attempts,
+                e,
+            )
+            if attempt + 1 < max_attempts:
+                await asyncio.sleep(0.8 * (attempt + 1))
+    logger.error(
+        "answer_callback_query: не удалось после %d попыток: %s",
+        max_attempts,
+        last_err,
+        exc_info=last_err is not None,
+    )
+    return False
+
+
+async def _notify_telegram_network_unreachable(
+    context: ContextTypes.DEFAULT_TYPE,
+    query,
+) -> None:
+    """
+    Пытается отправить в чат пояснение при полном отказе ``answer_callback_query``.
+
+    :param context: Контекст PTB.
+    :param query: Тот же ``CallbackQuery`` (для ``chat_id``).
+    :returns: None
+    """
+    msg = getattr(query, "message", None)
+    chat_id = getattr(msg, "chat_id", None) if msg else None
+    if chat_id is None:
+        return
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "❌ Нет связи с Telegram (сеть или прокси).\n\n"
+                "Проверьте интернет. Если заданы HTTP_PROXY/HTTPS_PROXY — "
+                "убедитесь, что через них доступен api.telegram.org, или "
+                "временно отключите прокси для этого процесса."
+            ),
+        )
+    except TelegramError as e:
+        logger.warning("Не удалось отправить подсказку о сети: %s", e)
+
 
 # CommandHandler по умолчанию использует только UpdateType.MESSAGES (message / edited_message).
 # В Telegram Business команды приходят в business_message — без этого OR хэндлер не вызывается.
@@ -267,12 +340,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "👋 *Парсер остатков*\n\n"
         f"📊 {status}\n\n"
         f"🎚 Порог отображения: `<= {config.STOCK_THRESHOLD}` шт.\n\n"
-        "Уведомления по лимитам групп и еженедельная ревизия — в `/help`.\n\n"
-        "Выберите действие:"
+        "Уведомления по лимитам групп и еженедельная ревизия — в `/help`."
     )
     await msg.reply_text(
         text,
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="Выберите действие:",
         reply_markup=main_keyboard(),
     )
 
@@ -434,12 +511,16 @@ async def handle_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         "👋 *Парсер остатков*\n\n"
         f"📊 {status}\n\n"
         f"🎚 Порог отображения: `<= {config.STOCK_THRESHOLD}` шт.\n\n"
-        "Уведомления по лимитам групп и еженедельная ревизия — в `/help`.\n\n"
-        "Выберите действие:"
+        "Уведомления по лимитам групп и еженедельная ревизия — в `/help`."
     )
     await msg.reply_text(
         text,
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text="Выберите действие:",
         reply_markup=main_keyboard(),
     )
 
@@ -460,7 +541,9 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     :returns: None
     """
     query = update.callback_query
-    await query.answer()
+    if not await _answer_callback_query_safe(query):
+        await _notify_telegram_network_unreachable(context, query)
+        return
 
     if not _check_auth(query.message.chat_id):
         await query.edit_message_text(_NOT_AUTH_TEXT)
@@ -546,7 +629,9 @@ async def cb_get_filtered(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     :returns: None
     """
     query = update.callback_query
-    await query.answer()
+    if not await _answer_callback_query_safe(query):
+        await _notify_telegram_network_unreachable(context, query)
+        return
 
     if not _check_auth(query.message.chat_id):
         await query.edit_message_text(_NOT_AUTH_TEXT)
@@ -629,10 +714,24 @@ async def cb_partial_start(
                    сообщения с inline-меню без смены режима.
     """
     query = update.callback_query
-    await query.answer()
+    if not await _answer_callback_query_safe(query):
+        await _notify_telegram_network_unreachable(context, query)
+        return
 
     if not _check_auth(query.message.chat_id):
         await _edit_callback_message_safe(query, _NOT_AUTH_TEXT)
+        return
+
+    if get_filter_mode(context) == FilterMode.PARTIAL_FILTER:
+        await _edit_callback_message_safe(
+            query,
+            "🔀 *Частичная фильтрация* уже активна.\n\n"
+            "Продолжайте на *reply-клавиатуре* внизу чата: выберите группу, "
+            "затем порог в сообщении с *inline-кнопками*, либо нажмите "
+            "*«Применить»*.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_keyboard(),
+        )
         return
 
     if not os.path.isfile(config.CURRENT_XLSX_PATH):
@@ -674,6 +773,7 @@ async def cb_partial_start(
         "в сообщении с кнопками. Можно настроить несколько групп и "
         "нажать *«Применить»*.",
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard(),
     )
     await context.bot.send_message(
         chat_id=query.message.chat_id,
@@ -700,10 +800,22 @@ async def cb_group_limit_start(
     :side effects: :func:`init_group_limit_session`, исходящие сообщения.
     """
     query = update.callback_query
-    await query.answer()
+    if not await _answer_callback_query_safe(query):
+        await _notify_telegram_network_unreachable(context, query)
+        return
 
     if not _check_auth(query.message.chat_id):
         await _edit_callback_message_safe(query, _NOT_AUTH_TEXT)
+        return
+
+    if get_filter_mode(context) == FilterMode.GROUP_LIMIT_SETUP:
+        await _edit_callback_message_safe(
+            query,
+            "🎚 *Лимиты по группам* уже открыты.\n\n"
+            "Продолжайте на *reply-клавиатуре* внизу чата.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_keyboard(),
+        )
         return
 
     if not os.path.isfile(config.CURRENT_XLSX_PATH):
@@ -749,6 +861,7 @@ async def cb_group_limit_start(
         "для выбранной группы.\n\n"
         "Нажмите *«В меню»*, чтобы выйти в главное меню.",
         parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard(),
     )
     await context.bot.send_message(
         chat_id=query.message.chat_id,
@@ -777,7 +890,9 @@ async def cb_group_limit_threshold(
                   ``user_data``.
     """
     query = update.callback_query
-    await query.answer()
+    if not await _answer_callback_query_safe(query):
+        await _notify_telegram_network_unreachable(context, query)
+        return
 
     if not _check_auth(query.message.chat_id):
         await query.edit_message_text(_NOT_AUTH_TEXT)
@@ -802,9 +917,9 @@ async def cb_group_limit_threshold(
         clear_gl_pending_group_index(context)
         set_gl_wizard_step(context, GroupLimitWizardStep.GROUPS_LIST)
         await query.edit_message_text(
-            f"🗑 Лимит для группы *{gname}* снят.\n\n"
+            f"🗑 Лимит для группы <b>{html_escape(gname)}</b> снят.\n\n"
             "Выберите другую группу на клавиатуре.",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -812,9 +927,9 @@ async def cb_group_limit_threshold(
         set_gl_pending_group_index(context, idx)
         set_gl_wizard_step(context, GroupLimitWizardStep.AWAITING_LIMIT_TEXT)
         await query.edit_message_text(
-            f"✏️ Группа: *{gname}*\n\n"
+            f"✏️ Группа: <b>{html_escape(gname)}</b>\n\n"
             "Введите целое число ≥ 0 — лимит остатка (включительно).",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -823,9 +938,10 @@ async def cb_group_limit_threshold(
         clear_gl_pending_group_index(context)
         set_gl_wizard_step(context, GroupLimitWizardStep.GROUPS_LIST)
         await query.edit_message_text(
-            f"✅ Для группы *{gname}* установлен лимит `{val}` шт.\n\n"
+            f"✅ Для группы <b>{html_escape(gname)}</b> установлен лимит "
+            f"<code>{val}</code> шт.\n\n"
             "Выберите следующую группу на клавиатуре.",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
         )
 
 
@@ -846,7 +962,9 @@ async def cb_partial_threshold(
                    редактирование сообщения с inline-клавиатурой.
     """
     query = update.callback_query
-    await query.answer()
+    if not await _answer_callback_query_safe(query):
+        await _notify_telegram_network_unreachable(context, query)
+        return
 
     if not _check_auth(query.message.chat_id):
         await query.edit_message_text(_NOT_AUTH_TEXT)
@@ -874,9 +992,9 @@ async def cb_partial_threshold(
         set_pending_group_index(context, idx)
         set_wizard_step(context, PartialWizardStep.AWAITING_THRESHOLD_TEXT)
         await query.edit_message_text(
-            f"✏️ Группа: *{gname}*\n\n"
+            f"✏️ Группа: <b>{html_escape(gname)}</b>\n\n"
             "Введите целое число — порог остатка (неотрицательное).",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
         )
         return
 
@@ -886,9 +1004,9 @@ async def cb_partial_threshold(
     clear_pending_group_index(context)
     set_wizard_step(context, PartialWizardStep.GROUPS_LIST)
     await query.edit_message_text(
-        f"✅ *{gname}*: порог ≤ `{val}` шт.\n\n"
+        f"✅ <b>{html_escape(gname)}</b>: порог ≤ <code>{val}</code> шт.\n\n"
         "Выберите следующую группу на клавиатуре или «Применить».",
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -916,21 +1034,45 @@ async def _partial_apply(
     """
     msg = update.effective_message
     chat_id = update.effective_chat.id
-    thresholds = get_partial_thresholds(context)
+    draft = get_partial_thresholds(context)
+    used_global_fallback = False
+    if draft:
+        rules: dict[str, int] = dict(draft)
+    else:
+        order = list(get_groups_order(context))
+        if not order:
+            try:
+                from parser.excel_parser import list_product_groups
 
-    if not thresholds:
+                order = list_product_groups()
+            except Exception as e:
+                logger.error(
+                    "Частичная выгрузка: нет черновика и не удалось список групп: %s",
+                    e,
+                    exc_info=True,
+                )
+                order = []
+        if not order:
+            logger.info(
+                "Частичная выгрузка: отклонено — нет групп (chat_id=%s).",
+                chat_id,
+            )
+            await msg.reply_text(
+                "⚠️ Нет списка групп для выгрузки.\n\n"
+                "Откройте «🔀 Частичная фильтрация» заново после актуализации "
+                "остатков.",
+                reply_markup=main_keyboard(),
+            )
+            return
+        rules = {g: int(config.STOCK_THRESHOLD) for g in order}
+        used_global_fallback = True
         logger.info(
-            "Частичная выгрузка: отклонено — пустой черновик порогов (chat_id=%s).",
+            "Частичная выгрузка: черновик пуст — применён общий порог ≤%s шт. "
+            "ко всем %d группам (chat_id=%s).",
+            config.STOCK_THRESHOLD,
+            len(rules),
             chat_id,
         )
-        await msg.reply_text(
-            "⚠️ Не задан ни один порог по группам.\n\n"
-            "Нажмите на название группы на клавиатуре и выберите порог. "
-            f"Глобальный порог ({config.STOCK_THRESHOLD} шт.) для частичного "
-            "режима не подставляется.",
-            reply_markup=groups_reply_keyboard(get_groups_order(context)),
-        )
-        return
 
     await msg.reply_text("⏳ Формирую файл...")
 
@@ -942,13 +1084,13 @@ async def _partial_apply(
         )
 
         all_items = parse_stock()
-        filtered = filter_by_group_thresholds(all_items, thresholds)
+        filtered = filter_by_group_thresholds(all_items, rules)
 
         if not filtered:
             logger.warning(
                 "Частичная выгрузка: 0 позиций после фильтра "
                 "(правил_групп=%d, chat_id=%s). Файл не отправляется.",
-                len(thresholds),
+                len(rules),
                 chat_id,
             )
             await msg.reply_text(
@@ -961,28 +1103,47 @@ async def _partial_apply(
 
         path = generate_filtered_partial_xlsx(filtered)
         status = get_status_text()
+        fb_line = ""
+        if used_global_fallback:
+            fb_line = (
+                f"\n<i>Пороги по группам не задавались — для всех {len(rules)} "
+                f"групп использован общий ≤ {config.STOCK_THRESHOLD} шт.</i>\n"
+            )
         caption = (
-            f"📊 {status}\n"
-            f"Частичный фильтр: *{len(thresholds)}* групп, "
-            f"*{len(filtered)}* поз."
+            f"📊 {html_escape(status)}{fb_line}"
+            f"Частичный фильтр: <b>{len(rules)}</b> групп, "
+            f"<b>{len(filtered)}</b> поз."
         )
 
-        with open(path, "rb") as f:
-            await context.bot.send_document(
-                chat_id=chat_id,
-                document=f,
-                filename="остатки_частичный_фильтр.xlsx",
-                caption=caption,
-                parse_mode=ParseMode.MARKDOWN,
-                write_timeout=120,
-                read_timeout=60,
+        try:
+            with open(path, "rb") as f:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=f,
+                    filename="остатки_частичный_фильтр.xlsx",
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    write_timeout=120,
+                    read_timeout=60,
+                )
+        except TelegramError as send_err:
+            logger.error(
+                "Частичная выгрузка: send_document: %s",
+                send_err,
+                exc_info=True,
             )
+            await msg.reply_text(
+                "❌ Не удалось отправить файл в Telegram. Попробуйте ещё раз "
+                "или проверьте размер/сеть.",
+                reply_markup=groups_reply_keyboard(get_groups_order(context)),
+            )
+            return
 
         logger.info(
             "Частичная выгрузка OK: файл=%s, правил_групп=%d, позиций=%d, "
             "chat_id=%s",
             os.path.basename(path),
-            len(thresholds),
+            len(rules),
             len(filtered),
             chat_id,
         )
@@ -1069,10 +1230,14 @@ async def handle_group_limit_messages(
     if get_filter_mode(context) != FilterMode.GROUP_LIMIT_SETUP:
         return
 
-    if msg.text.strip() == START_BUTTON_TEXT:
+    raw_text = msg.text.strip()
+    text = normalize_reply_button_text(raw_text)
+
+    if text == normalize_reply_button_text(START_BUTTON_TEXT):
         return
 
-    text = msg.text.strip()
+    menu_n = normalize_reply_button_text(LIMIT_REPLY_MENU_TEXT)
+    cancel_n = normalize_reply_button_text(PARTIAL_REPLY_CANCEL_TEXT)
     step = get_gl_wizard_step(context)
 
     if step == GroupLimitWizardStep.AWAITING_LIMIT_TEXT:
@@ -1093,7 +1258,7 @@ async def handle_group_limit_messages(
             raise ApplicationHandlerStop
 
         try:
-            lim = int(text)
+            lim = int(raw_text)
             if lim < 0:
                 raise ValueError
         except ValueError:
@@ -1104,9 +1269,10 @@ async def handle_group_limit_messages(
         clear_gl_pending_group_index(context)
         set_gl_wizard_step(context, GroupLimitWizardStep.GROUPS_LIST)
         await msg.reply_text(
-            f"✅ Для группы *{gname}* установлен лимит `{lim}` шт.\n"
+            f"✅ Для группы <b>{html_escape(gname)}</b> установлен лимит "
+            f"<code>{lim}</code> шт.\n"
             "Выберите другую группу или нажмите «В меню».",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=groups_reply_keyboard(
                 get_gl_groups_order(context),
                 footer_done_text=LIMIT_REPLY_MENU_TEXT,
@@ -1114,7 +1280,7 @@ async def handle_group_limit_messages(
         )
         raise ApplicationHandlerStop
 
-    if text == LIMIT_REPLY_MENU_TEXT:
+    if text == menu_n:
         reset_session_to_global(context)
         await msg.reply_text(
             "Настройка лимитов завершена.",
@@ -1127,7 +1293,7 @@ async def handle_group_limit_messages(
         )
         raise ApplicationHandlerStop
 
-    if text == PARTIAL_REPLY_CANCEL_TEXT:
+    if text == cancel_n:
         reset_session_to_global(context)
         await msg.reply_text(
             "Настройка лимитов отменена.",
@@ -1140,7 +1306,7 @@ async def handle_group_limit_messages(
         )
         raise ApplicationHandlerStop
 
-    idx = gl_group_index_by_reply_label(context, text)
+    idx = gl_group_index_by_reply_label(context, raw_text)
     if idx is None:
         await msg.reply_text(
             "Не понял. Выберите группу с клавиатуры "
@@ -1156,16 +1322,48 @@ async def handle_group_limit_messages(
     set_gl_wizard_step(context, GroupLimitWizardStep.LIMIT_FOR_GROUP)
     current = get_limit(gname)
     if current is not None:
-        cur_line = f"Текущий сохранённый лимит: `{current}` шт."
+        cur_line = f"Текущий сохранённый лимит: <code>{current}</code> шт."
     else:
-        cur_line = "Лимит пока *не задан*."
+        cur_line = "Лимит пока <b>не задан</b>."
 
     await msg.reply_text(
-        f"Группа: *{gname}*\n{cur_line}\n\nВыберите лимит:",
-        parse_mode=ParseMode.MARKDOWN,
+        f"Группа: <b>{html_escape(gname)}</b>\n{cur_line}\n\nВыберите лимит:",
+        parse_mode=ParseMode.HTML,
         reply_markup=group_limit_threshold_inline_keyboard(idx),
     )
     raise ApplicationHandlerStop
+
+
+async def handle_group_and_partial_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """
+    Текстовые мастера «лимиты по группам» и «частичная фильтрация» в одной цепочке.
+
+    В python-telegram-bot v20 в пределах одной группы хэндлеров срабатывает
+    не более **одного** ``MessageHandler`` на обновление (см. ``break`` в
+    ``Application.process_update``). Два отдельных хэндлера с одинаковым
+    фильтром ``filters.TEXT`` приводили к тому, что первый
+    (``handle_group_limit_messages``) всегда «съедал» сообщение и при режиме
+    ``PARTIAL_FILTER`` тихо выходил — частичная фильтрация не получала текст.
+
+    :param update: Входящее обновление с текстом.
+    :type update: Update
+    :param context: Контекст PTB.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :returns: None
+    :raises ApplicationHandlerStop: Если один из внутренних хэндлеров
+                                      остановил цепочку.
+    """
+    try:
+        await handle_partial_messages(update, context)
+    except ApplicationHandlerStop:
+        raise
+    try:
+        await handle_group_limit_messages(update, context)
+    except ApplicationHandlerStop:
+        raise
 
 
 async def handle_partial_messages(
@@ -1194,11 +1392,61 @@ async def handle_partial_messages(
     if not _check_auth(update.effective_chat.id):
         return
 
-    if get_filter_mode(context) != FilterMode.PARTIAL_FILTER:
+    chat_id = update.effective_chat.id
+    raw_text = msg.text.strip()
+    text = normalize_reply_button_text(raw_text)
+    mode = get_filter_mode(context)
+
+    apply_n = normalize_reply_button_text(PARTIAL_REPLY_APPLY_TEXT)
+    cancel_n = normalize_reply_button_text(PARTIAL_REPLY_CANCEL_TEXT)
+
+    if mode != FilterMode.PARTIAL_FILTER:
+        if text == apply_n or text == cancel_n:
+            if mode == FilterMode.GROUP_LIMIT_SETUP:
+                await msg.reply_text(
+                    "Сейчас открыт мастер *лимитов по группам*. "
+                    "Кнопки «Применить» / «Отмена» относятся к *частичной фильтрации*.\n\n"
+                    "Завершите настройку лимитов кнопкой «✅ В меню» или «❌ Отмена», "
+                    "затем снова выберите «🔀 Частичная фильтрация».",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=groups_reply_keyboard(
+                        get_gl_groups_order(context),
+                        footer_done_text=LIMIT_REPLY_MENU_TEXT,
+                    ),
+                )
+            else:
+                await msg.reply_text(
+                    "⚠️ Режим «частичной фильтрации» не активен "
+                    "(сессия сбросилась: перезапуск бота, /start, актуализация и т.п.).\n\n"
+                    "Нажмите «🔀 Частичная фильтрация» в меню — клавиатура с группами "
+                    "обновится.",
+                    reply_markup=ReplyKeyboardRemove(),
+                )
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text="Выберите действие:",
+                    reply_markup=main_keyboard(),
+                )
+            raise ApplicationHandlerStop
+        if mode == FilterMode.GLOBAL_FILTER and is_known_product_group_reply_text(
+            raw_text,
+        ):
+            await msg.reply_text(
+                "⚠️ Видна reply-клавиатура с группами, но сценарий "
+                "«частичной фильтрации» не активен (например после /start или "
+                "перезапуска бота).\n\n"
+                "Клавиатура снята. Нажмите «🔀 Частичная фильтрация» в меню ниже.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="Выберите действие:",
+                reply_markup=main_keyboard(),
+            )
+            raise ApplicationHandlerStop
         return
 
-    text = msg.text.strip()
-    if text == START_BUTTON_TEXT:
+    if text == normalize_reply_button_text(START_BUTTON_TEXT):
         return
     step = get_wizard_step(context)
 
@@ -1225,22 +1473,22 @@ async def handle_partial_messages(
         clear_pending_group_index(context)
         set_wizard_step(context, PartialWizardStep.GROUPS_LIST)
         await msg.reply_text(
-            f"✅ *{gname}*: порог ≤ `{thr}` шт.\n"
+            f"✅ <b>{html_escape(gname)}</b>: порог ≤ <code>{thr}</code> шт.\n"
             "Выберите следующую группу или «Применить».",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
             reply_markup=groups_reply_keyboard(get_groups_order(context)),
         )
         raise ApplicationHandlerStop
 
-    if text == PARTIAL_REPLY_APPLY_TEXT:
+    if text == apply_n:
         await _partial_apply(update, context)
         raise ApplicationHandlerStop
 
-    if text == PARTIAL_REPLY_CANCEL_TEXT:
+    if text == cancel_n:
         await _partial_cancel(update, context)
         raise ApplicationHandlerStop
 
-    idx = group_index_by_reply_label(context, text)
+    idx = group_index_by_reply_label(context, raw_text)
     if idx is None:
         await msg.reply_text(
             "Не понял. Выберите группу с клавиатуры "
@@ -1255,8 +1503,9 @@ async def handle_partial_messages(
 
     set_wizard_step(context, PartialWizardStep.THRESHOLD_FOR_GROUP)
     await msg.reply_text(
-        f"Группа: *{gname}*\nВыберите порог:",
-        parse_mode=ParseMode.MARKDOWN,
+        f"Группа: <b>{html_escape(gname)}</b>\n"
+        "Выберите порог остатка для этой группы (частичная выгрузка Excel):",
+        parse_mode=ParseMode.HTML,
         reply_markup=partial_threshold_inline_keyboard(idx),
     )
     raise ApplicationHandlerStop
@@ -1271,11 +1520,9 @@ def register_handlers(app: Application) -> None:
     2. Callback: ``glt:`` и ``group_limit_start``, частичная фильтрация
        (``pft:``, ``partial_start``), затем актуализация и общий Excel.
     3. Reply «▶️ Start» — до мастеров и пароля.
-    4. Лимиты по группам (текст) — до частичного и пароля;
-       ``ApplicationHandlerStop``.
-    5. Частичная фильтрация (текст) — до пароля;
-       ``ApplicationHandlerStop``.
-    6. MessageHandler для пароля — последним.
+    4. Текст: ``handle_group_and_partial_text`` (лимиты по группам + частичная
+       фильтрация подряд; из-за ограничения PTB v20 — один ``MessageHandler``).
+    5. MessageHandler для пароля — последним.
 
     :param app: Экземпляр Application из python-telegram-bot.
     :type app: Application
@@ -1311,9 +1558,8 @@ def register_handlers(app: Application) -> None:
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            handle_group_limit_messages,
+            handle_group_and_partial_text,
         ),
     )
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_partial_messages))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_password))
     logger.info("Хэндлеры зарегистрированы.")

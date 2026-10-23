@@ -37,6 +37,38 @@ CB_GROUP_LIMIT_START = "group_limit_start"
 # с фильтром filters.Regex в handlers.py)
 START_BUTTON_TEXT = "▶️ Start"
 
+
+def normalize_reply_button_text(text: str) -> str:
+    """
+    Нормализует текст reply-кнопки для сравнения с константами.
+
+    Убирает U+FE0F (variation selector у emoji), заменяет неразрывные и прочие
+    Unicode-пробелы на обычный пробел, схлопывает пробелы — иначе «✅\\u00a0
+    Применить» с клиента не совпадёт с ``PARTIAL_REPLY_APPLY_TEXT``.
+
+    :param text: Сырой текст сообщения или подписи кнопки.
+    :type text: str
+    :returns: Строка для сравнения с ``PARTIAL_REPLY_*`` и именами групп.
+    :rtype: str
+    :side effects: Нет.
+    """
+    s = (text or "").replace("\ufe0f", "")
+    for ch in (
+        "\u00a0",
+        "\u202f",
+        "\u2007",
+        "\u3000",
+        "\t",
+        "\n",
+        "\r",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+    ):
+        s = s.replace(ch, " ")
+    return " ".join(s.split())
+
+
 # --- Reply: режим выбора групп (частичная фильтрация) ---
 PARTIAL_REPLY_APPLY_TEXT = "✅ Применить"
 PARTIAL_REPLY_CANCEL_TEXT = "❌ Отмена"
@@ -142,9 +174,9 @@ def remove_keyboard() -> ReplyKeyboardRemove:
     """
     Возвращает объект для скрытия reply-клавиатуры у пользователя.
 
-    **Резерв:** в текущих потоках бота не вызывается. Предусмотрено для сценариев
-    вроде явного сброса авторизации или скрытия reply-клавиатуры без смены текстов
-    остальных экранов.
+    **Резерв:** в текущих потоках бота не вызывается. Предусмотрено для
+    сценариев вроде явного сброса авторизации или скрытия reply-клавиатуры без
+    смены текстов остальных экранов.
 
     :returns: Объект ReplyKeyboardRemove.
     :rtype: ReplyKeyboardRemove
@@ -164,7 +196,8 @@ def main_keyboard() -> InlineKeyboardMarkup:
     Первые две кнопки — без изменений по смыслу и порядку:
     «Актуализировать остатки», «Получить отфильтрованные остатки».
     Третья — вход в частичную фильтрацию по группам.
-    Четвёртая — лимиты по группам для уведомлений (см. ``docs/fourty_role.md``).
+    Четвёртая — лимиты по группам для уведомлений
+    (см. ``docs/fourty_role.md``).
 
     :returns: Объект InlineKeyboardMarkup для передачи в reply_markup.
     :rtype: InlineKeyboardMarkup

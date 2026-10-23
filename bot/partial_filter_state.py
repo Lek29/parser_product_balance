@@ -14,9 +14,11 @@
 
 from __future__ import annotations
 
+import unicodedata
 from enum import Enum
 from typing import Any, Optional
 
+from bot.keyboards import normalize_reply_button_text
 
 # --- Режим работы бота для пользователя ---
 
@@ -233,12 +235,12 @@ def gl_group_index_by_reply_label(context: Any, label: str) -> Optional[int]:
     :returns: Индекс или ``None``.
     :rtype: Optional[int]
     """
-    text = (label or "").strip()
-    if not text:
+    key = _group_reply_match_key(label or "")
+    if not key:
         return None
     order = get_gl_groups_order(context)
     for i, g in enumerate(order):
-        if g == text:
+        if _group_reply_match_key(g) == key:
             return i
     return None
 
@@ -387,9 +389,26 @@ def get_groups_order(context: Any) -> list[str]:
     return list(order)
 
 
+def _group_reply_match_key(label: str) -> str:
+    """
+    Ключ для сравнения имени группы с текстом reply-кнопки.
+
+    NFKC убирает совместимые варианты символов; ``casefold`` — для латиницы
+    (например ВЕЛО / вело).
+
+    :param label: Имя группы или текст с клавиатуры.
+    :type label: str
+    :returns: Нормализованная строка для сравнения.
+    :rtype: str
+    :side effects: Нет.
+    """
+    t = normalize_reply_button_text(label or "")
+    return unicodedata.normalize("NFKC", t).casefold()
+
+
 def group_index_by_reply_label(context: Any, label: str) -> Optional[int]:
     """
-    Находит индекс группы по точному совпадению текста reply-кнопки.
+    Находит индекс группы по тексту reply-кнопки (с нормализацией Unicode).
 
     :param context: Контекст python-telegram-bot.
     :type context: Any
@@ -399,14 +418,44 @@ def group_index_by_reply_label(context: Any, label: str) -> Optional[int]:
     :rtype: Optional[int]
     :side effects: Нет (чтение ``user_data``).
     """
-    text = (label or "").strip()
-    if not text:
+    key = _group_reply_match_key(label)
+    if not key:
         return None
     order = get_groups_order(context)
     for i, g in enumerate(order):
-        if g == text:
+        if _group_reply_match_key(g) == key:
             return i
     return None
+
+
+def is_known_product_group_reply_text(label: str) -> bool:
+    """
+    Проверяет, совпадает ли текст сообщения с именем группы из
+    ``current.xlsx``.
+
+    Нужно, чтобы отличить тап по старой reply-клавиатуре групп от обычного
+    текста, когда режим уже не ``PARTIAL_FILTER``.
+
+    :param label: Текст входящего сообщения (как с reply-кнопки).
+    :type label: str
+    :returns: True если такая группа есть в актуальной таблице.
+    :rtype: bool
+    :side effects: Читает xlsx через
+                   :func:`parser.excel_parser.list_product_groups`.
+    """
+    from parser.excel_parser import list_product_groups
+
+    key = _group_reply_match_key(label)
+    if not key:
+        return False
+    try:
+        names = list_product_groups()
+    except Exception:
+        return False
+    for g in names:
+        if _group_reply_match_key(g) == key:
+            return True
+    return False
 
 
 def set_wizard_step(context: Any, step: PartialWizardStep) -> None:

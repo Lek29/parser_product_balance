@@ -384,6 +384,49 @@ def _select_mail_folder(imap: imaplib.IMAP4_SSL) -> None:
         )
 
 
+def _imap_fetch_payload(fetch_data: Optional[list]) -> Optional[bytes]:
+    """
+    Извлекает байтовое тело из ответа ``imap.fetch``.
+
+    При наличии literal ``imaplib`` возвращает элементы вида
+    ``(b'… {N}', b'payload…')``. Без literal (например ``BODY[HEADER] NIL``)
+    первый элемент часто бывает голыми ``bytes``: тогда ``data[0][1]`` — это
+    ``int`` (код байта), и ``email.message_from_bytes`` падает с
+    ``AttributeError: 'int' object has no attribute 'decode'``.
+
+    :param fetch_data: Второй элемент кортежа от ``imap.fetch`` (список частей ответа).
+    :type fetch_data: Optional[list]
+    :returns: Байты тела/заголовков или ``None``, если извлечь нельзя.
+    :rtype: Optional[bytes]
+
+    :example:
+
+        >>> _imap_fetch_payload([(b'1 (BODY[HEADER] {5}', b'From:'), b')'])
+        b'From:'
+        >>> _imap_fetch_payload([b'1 (BODY[HEADER] NIL)']) is None
+        True
+    """
+    if not fetch_data:
+        return None
+    first = fetch_data[0]
+    if first is None:
+        return None
+    if isinstance(first, (tuple, list)) and len(first) >= 2:
+        payload = first[1]
+        if isinstance(payload, bytes):
+            return payload
+        logger.debug(
+            "IMAP FETCH: payload не bytes (тип=%s), пропускаем.",
+            type(payload).__name__,
+        )
+        return None
+    logger.debug(
+        "IMAP FETCH: нет literal-тела (тип первого элемента=%s), пропускаем.",
+        type(first).__name__,
+    )
+    return None
+
+
 def _find_latest_archive_attachment(
     imap: imaplib.IMAP4_SSL,
 ) -> Tuple[Optional[email.message.Message], Optional[str], Optional[str]]:
@@ -447,10 +490,11 @@ def _find_latest_archive_attachment(
     for msg_id in reversed(msg_ids):
         # Фаза 1: загружаем только заголовки — дёшево (~2-5 КБ на письмо)
         _, header_data = imap.fetch(msg_id, "(BODY.PEEK[HEADER])")
-        if not header_data or not header_data[0]:
+        header_bytes = _imap_fetch_payload(header_data)
+        if header_bytes is None:
             continue
 
-        headers = email.message_from_bytes(header_data[0][1])
+        headers = email.message_from_bytes(header_bytes)
         content_type = headers.get("Content-Type", "").lower()
 
         # Вложения возможны только в multipart-письмах
@@ -480,10 +524,11 @@ def _find_latest_archive_attachment(
 
         # Фаза 2: письмо многочастное — загружаем полностью
         _, msg_data = imap.fetch(msg_id, "(RFC822)")
-        if not msg_data or not msg_data[0]:
+        msg_bytes = _imap_fetch_payload(msg_data)
+        if msg_bytes is None:
             continue
 
-        msg = email.message_from_bytes(msg_data[0][1])
+        msg = email.message_from_bytes(msg_bytes)
         date_str = msg.get("Date", "") or date_str
         email_dt = _parse_email_date_for_sort(date_str)
 
