@@ -1,15 +1,25 @@
-name: My First CI
+# CI: проверка Python-кода линтером Ruff при каждом пуше в main.
+name: CI
 
+# Когда запускать пайплайн: только push в ветку main.
 on:
   push:
     branches:
       - main
 
 jobs:
-  hello-job:
+  # Одна простая job: скачать код, поставить uv, прогнать ruff.
+  lint:
     runs-on: ubuntu-latest
     steps:
+      # Шаг 1: скачать код репозитория в рабочую директорию раннера.
       - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Print success message
-        run: echo "Ура! Мой первый CI/CD скрипт работает!"
+
+      # Шаг 2: установить uv (официальный action от Astral) и добавить его в PATH.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      # Шаг 3: проверить код Ruff через uvx (сам скачает и запустит ruff, без uv sync).
+      - name: Run Ruff linter
+        run: uvx ruff check .
