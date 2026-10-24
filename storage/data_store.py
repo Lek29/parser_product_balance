@@ -152,16 +152,20 @@ def is_local_mail_snapshot_fresh_this_week(
     reference: Optional[datetime] = None,
 ) -> bool:
     """
-    Локальный снимок достаточно свеж, чтобы не ходить на IMAP (календарная неделя МСК).
+    Локальный файл уже скачивали на этой календарной неделе МСК — IMAP можно пропустить.
+
+    Критерий — ``updated_at`` (факт скачивания в ``_save_meta``), не ``last_check_date``
+    (проверка почты без нового файла). Иначе «проверили в октябре, файл с апреля»
+    ошибочно блокирует IMAP до конца недели.
 
     Условия:
     * существует ``current.xlsx``;
-    * в ``meta.json`` есть ``last_check_date`` или ``updated_at``, дата которого
-      попадает в ту же неделю Пн–Вс (Europe/Moscow), что и ``reference``.
+    * в ``meta.json`` есть ``updated_at``, дата которого в той же неделе
+      Пн–Вс (Europe/Moscow), что и ``reference``.
 
     :param reference: Точка «сейчас» (для тестов); по умолчанию Москва сейчас.
     :type reference: Optional[datetime]
-    :returns: ``True``, если IMAP можно пропустить.
+    :returns: ``True``, если скачивание уже было на этой неделе.
     :rtype: bool
     """
     from services.calendar_week import (
@@ -175,9 +179,7 @@ def is_local_mail_snapshot_fresh_this_week(
     meta = read_meta_json()
     if meta is None:
         return False
-    anchor = parse_meta_date(meta.get("last_check_date"))
-    if anchor is None:
-        anchor = parse_meta_date(meta.get("updated_at"))
+    anchor = parse_meta_date(meta.get("updated_at"))
     if anchor is None:
         return False
     return same_calendar_week(anchor, today_moscow(reference))

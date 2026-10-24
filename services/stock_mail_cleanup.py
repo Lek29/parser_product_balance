@@ -86,8 +86,7 @@ def plan_deletions(imap) -> tuple[Optional[bytes], set[bytes], list[str]]:
     lines: list[str] = []
     if best is not None:
         lines.append(
-            f"KEEPER id={_msg_id_label(best.msg_id)} file={best.filename!r} "
-            f"stock_date={best.stock_date.isoformat()}"
+            f"KEEPER id={_msg_id_label(best.msg_id)} file={best.filename!r} stock_date={best.stock_date.isoformat()}"
         )
     else:
         lines.append("KEEPER: нет кандидатов с архивом остатков")
@@ -97,7 +96,7 @@ def plan_deletions(imap) -> tuple[Optional[bytes], set[bytes], list[str]]:
         if keeper_id is not None and c.msg_id == keeper_id:
             continue
         to_delete.add(c.msg_id)
-        lines.append(f"DELETE (лишний архив остатков) id={_msg_id_label(c.msg_id)} " f"file={c.filename!r}")
+        lines.append(f"DELETE (лишний архив остатков) id={_msg_id_label(c.msg_id)} file={c.filename!r}")
 
     _select_mail_folder(imap)
     _, msg_ids_raw = imap.search(None, "ALL")
@@ -115,12 +114,10 @@ def plan_deletions(imap) -> tuple[Optional[bytes], set[bytes], list[str]]:
             continue
         if msg_day < week_start:
             to_delete.add(msg_id)
-            lines.append(
-                f"DELETE (старше недели) id={_msg_id_label(msg_id)} " f"Date={raw!r} day={msg_day.isoformat()}"
-            )
+            lines.append(f"DELETE (старше недели) id={_msg_id_label(msg_id)} Date={raw!r} day={msg_day.isoformat()}")
 
     lines.append(
-        f"Итого к удалению: {len(to_delete)}; папка={config.EMAIL_IMAP_FOLDER!r}; " f"писем в папке: {len(all_ids)}"
+        f"Итого к удалению: {len(to_delete)}; папка={config.EMAIL_IMAP_FOLDER!r}; писем в папке: {len(all_ids)}"
     )
     return keeper_id, to_delete, lines
 

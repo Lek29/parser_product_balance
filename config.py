@@ -72,7 +72,7 @@ def _mail_imap_max_message_age_days() -> Optional[int]:
         v = int(stripped, 10)
     except ValueError as e:
         raise EnvironmentError(
-            "Переменная MAIL_IMAP_MAX_MESSAGE_AGE_DAYS должна быть целым числом, " f"получено: {raw!r}"
+            f"Переменная MAIL_IMAP_MAX_MESSAGE_AGE_DAYS должна быть целым числом, получено: {raw!r}"
         ) from e
     if v <= 0:
         return None

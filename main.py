@@ -111,7 +111,7 @@ def main() -> None:
         register_handlers(app)
 
         logger.info(
-            "Бот запущен (python-telegram-bot). " "Ожидание сообщений... (Ctrl+C для остановки)",
+            "Бот запущен (python-telegram-bot). Ожидание сообщений... (Ctrl+C для остановки)",
         )
         app.run_polling(
             allowed_updates=Update.ALL_TYPES,

@@ -281,7 +281,7 @@ def _run(all_items: list[dict]) -> None:
     filename = f"ушли_в_ноль_{today.isoformat()}.xlsx"
     path = os.path.join(config.TEMP_DIR, filename)
     _write_xlsx(hits, path)
-    caption = f"Ушли в 0 относительно прошлой недели " f"({week_from} → {week_to}): {len(hits)} поз."
+    caption = f"Ушли в 0 относительно прошлой недели ({week_from} → {week_to}): {len(hits)} поз."
     sent = send_zero_sold_xlsx(path, caption=caption, filename=filename)
     if sent:
         _save_state(week_from, week_to)

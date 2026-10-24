@@ -48,7 +48,7 @@ def fetch_and_parse() -> None:
         outcome = fetch_and_save()
 
         if outcome == MailFetchOutcome.SKIPPED_TODAY:
-            logger.info("Планировщик: IMAP пропущен — локальный снимок свеж " "(календарная неделя МСК).")
+            logger.info("Планировщик: IMAP пропущен — локальный снимок свеж (календарная неделя МСК).")
             return
 
         if outcome == MailFetchOutcome.ARCHIVE_FAILURE:

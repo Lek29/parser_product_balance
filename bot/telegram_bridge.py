@@ -64,7 +64,7 @@ def send_group_limit_alert_html(html: str) -> None:
     chat_id = config.STOCK_LIMIT_ALERT_CHAT_ID
     if chat_id is None:
         logger.warning(
-            "Telegram bridge: STOCK_LIMIT_ALERT_CHAT_ID не задан — " "алерт лимитов не отправлен (%d симв. текста).",
+            "Telegram bridge: STOCK_LIMIT_ALERT_CHAT_ID не задан — алерт лимитов не отправлен (%d симв. текста).",
             len(html),
         )
         return
@@ -127,13 +127,13 @@ def send_zero_sold_xlsx(
     chat_id = config.STOCK_LIMIT_ALERT_CHAT_ID
     if chat_id is None:
         logger.warning(
-            "Telegram bridge: STOCK_LIMIT_ALERT_CHAT_ID не задан — " "zero-sold xlsx не отправлен.",
+            "Telegram bridge: STOCK_LIMIT_ALERT_CHAT_ID не задан — zero-sold xlsx не отправлен.",
         )
         return False
 
     if _bot is None or _loop is None:
         logger.warning(
-            "Telegram bridge: bot/loop не зарегистрированы — zero-sold xlsx " "не отправлен (chat_id=%s).",
+            "Telegram bridge: bot/loop не зарегистрированы — zero-sold xlsx не отправлен (chat_id=%s).",
             chat_id,
         )
         return False

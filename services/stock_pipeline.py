@@ -168,12 +168,12 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
         if not os.path.isfile(config.FILTERED_XLSX_PATH):
             generate_filtered_xlsx(filtered)
             logger.info(
-                "Кэш парсинга: data.json совпал с current.xlsx; " "пересобран отсутствующий filtered.xlsx (%d поз.).",
+                "Кэш парсинга: data.json совпал с current.xlsx; пересобран отсутствующий filtered.xlsx (%d поз.).",
                 len(filtered),
             )
         else:
             logger.info(
-                "Кэш парсинга: data.json совпал с current.xlsx; " "parse_stock пропущен (%d поз.).",
+                "Кэш парсинга: data.json совпал с current.xlsx; parse_stock пропущен (%d поз.).",
                 len(all_items),
             )
         return len(all_items), len(filtered)

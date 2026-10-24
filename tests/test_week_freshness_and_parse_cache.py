@@ -40,7 +40,7 @@ def test_parse_meta_date_iso_and_date() -> None:
 
 
 def test_local_snapshot_fresh_same_week(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """current.xlsx + last_check_date в той же неделе МСК → fresh."""
+    """current.xlsx + updated_at в той же неделе МСК → fresh; на следующей — нет."""
     xlsx = tmp_path / "current.xlsx"
     xlsx.write_bytes(b"PK\x03\x04fake")
     meta = tmp_path / "meta.json"
@@ -58,6 +58,33 @@ def test_local_snapshot_fresh_same_week(tmp_path: Path, monkeypatch: pytest.Monk
 
     ref_next = datetime(2026, 10, 26, 9, 0, tzinfo=ZoneInfo("Europe/Moscow"))
     assert is_local_mail_snapshot_fresh_this_week(reference=ref_next) is False
+
+
+def test_local_snapshot_fresh_ignores_last_check_without_download(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Проверка почты на этой неделе без скачивания (updated_at старый) → не fresh."""
+    xlsx = tmp_path / "current.xlsx"
+    xlsx.write_bytes(b"PK\x03\x04fake")
+    meta = tmp_path / "meta.json"
+    meta.write_text(
+        json.dumps(
+            {
+                "last_check_date": "2026-10-23",
+                "updated_at": "2026-04-13T09:03:00",
+                "email_date": "Mon, 13 Apr 2026 09:03:00 +0300",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "CURRENT_XLSX_PATH", str(xlsx))
+    monkeypatch.setattr(config, "META_JSON_PATH", str(meta))
+
+    from storage.data_store import is_local_mail_snapshot_fresh_this_week
+
+    ref = datetime(2026, 10, 23, 12, 0, tzinfo=ZoneInfo("Europe/Moscow"))
+    assert is_local_mail_snapshot_fresh_this_week(reference=ref) is False
 
 
 def test_data_json_fingerprint_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -73,9 +73,9 @@ class MailFetchOutcome(str, Enum):
     """
     Результат :func:`fetch_and_save`: явные семантики вместо ``Optional[bool]``.
 
-    :cvar SKIPPED_TODAY: IMAP не вызывался — локальный снимок свеж в рамках
-        календарной недели Пн–Вс (Europe/Moscow) при ``force=False``.
-        Имя значения историческое (раньше — «сегодня»).
+    :cvar SKIPPED_TODAY: IMAP не вызывался — ``current.xlsx`` уже скачивали
+        на этой календарной неделе Пн–Вс (Europe/Moscow) при ``force=False``
+        (критерий: ``meta.updated_at``). Имя значения историческое.
     :cvar NO_CHANGES: Почта проверена, новых данных нет (нет письма или дата не новее сохранённой).
     :cvar UPDATED: Новый архив скачан, ``current.xlsx`` и meta обновлены.
     :cvar ARCHIVE_FAILURE: Ошибка скачивания вложения или извлечения .xlsx (не путать с NO_CHANGES).
@@ -372,7 +372,7 @@ def _select_mail_folder(imap: imaplib.IMAP4_SSL) -> None:
             first = data[0]
             detail = first.decode("utf-8", errors="replace").strip() if isinstance(first, bytes) else str(first)
         logger.error(
-            "Не удалось открыть IMAP-папку %r (ответ сервера: %s). " "Проверьте EMAIL_IMAP_FOLDER.",
+            "Не удалось открыть IMAP-папку %r (ответ сервера: %s). Проверьте EMAIL_IMAP_FOLDER.",
             folder,
             detail or typ,
         )
@@ -486,7 +486,7 @@ def collect_stock_archive_candidates(
             )
         if stop_scan:
             logger.info(
-                "Окно по дате письма (%s дн.): письмо id=%s старше окна (Date=%s), " "обход остановлен.",
+                "Окно по дате письма (%s дн.): письмо id=%s старше окна (Date=%s), обход остановлен.",
                 max_msg_age,
                 msg_id.decode("ascii", errors="replace"),
                 date_str,
@@ -670,7 +670,7 @@ def _extract_xlsx_from_archive(archive_path: str) -> Optional[str]:
     elif archive_path.lower().endswith(".rar"):
         if not RAR_SUPPORT:
             raise RuntimeError(
-                "Архив имеет формат .rar, но модуль rarfile не установлен. " "Выполните: pip install rarfile"
+                "Архив имеет формат .rar, но модуль rarfile не установлен. Выполните: pip install rarfile"
             )
         with rarfile.RarFile(archive_path, "r") as rf:
             for name in rf.namelist():
@@ -734,8 +734,8 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
     - ``UPDATED`` — данные успешно обновлены (новое письмо скачано и сохранено)
     - ``NO_CHANGES`` — IMAP проверен, нет архива с префиксом остатков в имени, либо
       дата выбранного письма не новее сохранённой в ``meta.json``
-    - ``SKIPPED_TODAY`` — IMAP не вызывался: локальный снимок свеж в календарной
-      неделе Пн–Вс МСК (``force=False``)
+    - ``SKIPPED_TODAY`` — IMAP не вызывался: файл уже скачивали на этой
+      календарной неделе Пн–Вс МСК (``meta.updated_at``, ``force=False``)
     - ``ARCHIVE_FAILURE`` — не удалось скачать вложение или извлечь .xlsx из архива
 
     Логика ветвления (упрощённо):
@@ -785,7 +785,7 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
 
     # Раз в календарную неделю МСК достаточно; дальше работаем с локальным xlsx.
     if not force and is_local_mail_snapshot_fresh_this_week():
-        logger.info("Локальный снимок свеж (календарная неделя МСК). IMAP пропущен.")
+        logger.info("Файл уже скачивали на этой календарной неделе МСК (updated_at). IMAP пропущен.")
         return MailFetchOutcome.SKIPPED_TODAY
 
     imap = None
@@ -813,7 +813,7 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
         archive_path = _download_archive(msg, archive_filename)
         if archive_path is None:
             logger.error(
-                "MAIL_FETCH_ARCHIVE_FAILURE: не удалось скачать вложение из письма " "(вложение: %s).",
+                "MAIL_FETCH_ARCHIVE_FAILURE: не удалось скачать вложение из письма (вложение: %s).",
                 archive_filename,
             )
             return MailFetchOutcome.ARCHIVE_FAILURE

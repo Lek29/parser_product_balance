@@ -403,9 +403,7 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if remaining_attempts > 0:
             await msg.reply_text(f"❌ Неверный пароль. Осталось попыток: {remaining_attempts}.")
         else:
-            await msg.reply_text(
-                f"🚫 Слишком много неверных попыток.\n\n" f"Повторите через {AUTH_LOCKOUT_SECONDS} сек."
-            )
+            await msg.reply_text(f"🚫 Слишком много неверных попыток.\n\nПовторите через {AUTH_LOCKOUT_SECONDS} сек.")
         logger.warning(
             "Неверный пароль от пользователя %d (попытка %d/%d).",
             chat_id,
@@ -547,19 +545,14 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         from services.stock_pipeline import run_parse_and_save_filtered
 
-        # SKIPPED_TODAY — IMAP не вызывался: снимок свеж в календарной неделе МСК
+        # SKIPPED_TODAY — уже скачивали на этой календарной неделе МСК (updated_at)
         if outcome == MailFetchOutcome.SKIPPED_TODAY:
-            await query.edit_message_text("⏳ Локальные данные этой недели — сверяю кэш таблицы...")
+            await query.edit_message_text("⏳ Файл этой недели уже есть — сверяю кэш таблицы...")
             all_count, filtered_count = run_parse_and_save_filtered()
             reset_session_to_global(context)
             status = get_status_text()
-            from storage.data_store import get_last_check_date
-
-            check_date = get_last_check_date() or "—"
             await query.edit_message_text(
-                f"✅ На этой неделе почта уже не нужна "
-                f"(проверка: {check_date}).\n"
-                f"Работаем с локальным файлом.\n\n"
+                "✅ На этой неделе файл с почты уже скачивали.\n\n"
                 f"📊 {status}\n"
                 f"📦 Позиций: `{all_count}` · малый остаток: `{filtered_count}`",
                 parse_mode=ParseMode.MARKDOWN,
@@ -833,7 +826,7 @@ async def cb_group_limit_start(
     if get_filter_mode(context) == FilterMode.GROUP_LIMIT_SETUP:
         await _edit_callback_message_safe(
             query,
-            "🎚 *Лимиты по группам* уже открыты.\n\n" "Продолжайте на *reply-клавиатуре* внизу чата.",
+            "🎚 *Лимиты по группам* уже открыты.\n\nПродолжайте на *reply-клавиатуре* внизу чата.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_keyboard(),
         )
@@ -937,7 +930,7 @@ async def cb_group_limit_threshold(
         clear_gl_pending_group_index(context)
         set_gl_wizard_step(context, GroupLimitWizardStep.GROUPS_LIST)
         await query.edit_message_text(
-            f"🗑 Лимит для группы <b>{html_escape(gname)}</b> снят.\n\n" "Выберите другую группу на клавиатуре.",
+            f"🗑 Лимит для группы <b>{html_escape(gname)}</b> снят.\n\nВыберите другую группу на клавиатуре.",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -946,7 +939,7 @@ async def cb_group_limit_threshold(
         set_gl_pending_group_index(context, idx)
         set_gl_wizard_step(context, GroupLimitWizardStep.AWAITING_LIMIT_TEXT)
         await query.edit_message_text(
-            f"✏️ Группа: <b>{html_escape(gname)}</b>\n\n" "Введите целое число ≥ 0 — лимит остатка (включительно).",
+            f"✏️ Группа: <b>{html_escape(gname)}</b>\n\nВведите целое число ≥ 0 — лимит остатка (включительно).",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -1010,7 +1003,7 @@ async def cb_partial_threshold(
         set_pending_group_index(context, idx)
         set_wizard_step(context, PartialWizardStep.AWAITING_THRESHOLD_TEXT)
         await query.edit_message_text(
-            f"✏️ Группа: <b>{html_escape(gname)}</b>\n\n" "Введите целое число — порог остатка (неотрицательное).",
+            f"✏️ Группа: <b>{html_escape(gname)}</b>\n\nВведите целое число — порог остатка (неотрицательное).",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -1084,7 +1077,7 @@ async def _partial_apply(
         rules = {g: int(config.STOCK_THRESHOLD) for g in order}
         used_global_fallback = True
         logger.info(
-            "Частичная выгрузка: черновик пуст — применён общий порог ≤%s шт. " "ко всем %d группам (chat_id=%s).",
+            "Частичная выгрузка: черновик пуст — применён общий порог ≤%s шт. ко всем %d группам (chat_id=%s).",
             config.STOCK_THRESHOLD,
             len(rules),
             chat_id,
@@ -1104,7 +1097,7 @@ async def _partial_apply(
 
         if not filtered:
             logger.warning(
-                "Частичная выгрузка: 0 позиций после фильтра " "(правил_групп=%d, chat_id=%s). Файл не отправляется.",
+                "Частичная выгрузка: 0 позиций после фильтра (правил_групп=%d, chat_id=%s). Файл не отправляется.",
                 len(rules),
                 chat_id,
             )
@@ -1125,9 +1118,7 @@ async def _partial_apply(
                 f"групп использован общий ≤ {config.STOCK_THRESHOLD} шт.</i>\n"
             )
         caption = (
-            f"📊 {html_escape(status)}{fb_line}"
-            f"Частичный фильтр: <b>{len(rules)}</b> групп, "
-            f"<b>{len(filtered)}</b> поз."
+            f"📊 {html_escape(status)}{fb_line}Частичный фильтр: <b>{len(rules)}</b> групп, <b>{len(filtered)}</b> поз."
         )
 
         try:
@@ -1148,7 +1139,7 @@ async def _partial_apply(
                 exc_info=True,
             )
             await msg.reply_text(
-                "❌ Не удалось отправить файл в Telegram. Попробуйте ещё раз " "или проверьте размер/сеть.",
+                "❌ Не удалось отправить файл в Telegram. Попробуйте ещё раз или проверьте размер/сеть.",
                 reply_markup=groups_reply_keyboard(get_groups_order(context)),
             )
             return
@@ -1511,7 +1502,7 @@ async def handle_partial_messages(
 
     set_wizard_step(context, PartialWizardStep.THRESHOLD_FOR_GROUP)
     await msg.reply_text(
-        f"Группа: <b>{html_escape(gname)}</b>\n" "Выберите порог остатка для этой группы (частичная выгрузка Excel):",
+        f"Группа: <b>{html_escape(gname)}</b>\nВыберите порог остатка для этой группы (частичная выгрузка Excel):",
         parse_mode=ParseMode.HTML,
         reply_markup=partial_threshold_inline_keyboard(idx),
     )
