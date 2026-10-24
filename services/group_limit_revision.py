@@ -84,8 +84,7 @@ def local_snapshot_acceptable_for_limit_revision(
         parse_stock(path)
     except Exception:
         logger.warning(
-            "Ревизия лимитов: parse_stock(current.xlsx) не удался — "
-            "локальный снимок не принят.",
+            "Ревизия лимитов: parse_stock(current.xlsx) не удался — " "локальный снимок не принят.",
             exc_info=True,
         )
         return False
@@ -121,8 +120,7 @@ def local_snapshot_acceptable_for_limit_revision(
         return True
 
     logger.info(
-        "Ревизия лимитов: локальный снимок не свежий (ни дата проверки, "
-        "ни updated_at в окне %d ч).",
+        "Ревизия лимитов: локальный снимок не свежий (ни дата проверки, " "ни updated_at в окне %d ч).",
         REVISION_MAX_META_AGE_HOURS,
     )
     return False
@@ -170,8 +168,7 @@ def run_weekly_group_limit_revision() -> None:
 
         source = "fetched_from_mail"
         logger.info(
-            "Ревизия порогов по группам: источник=%s (fetch_and_save), "
-            "групп_с_лимитом=%d.",
+            "Ревизия порогов по группам: источник=%s (fetch_and_save), " "групп_с_лимитом=%d.",
             source,
             len(limits),
         )

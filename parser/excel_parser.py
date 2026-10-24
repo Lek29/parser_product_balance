@@ -205,9 +205,7 @@ def list_product_groups(xlsx_path: Optional[str] = None) -> list[str]:
     >>> # ['Аксессуары', 'Велосипеды', ...]
     """
     items = parse_stock(xlsx_path)
-    labels = {
-        normalize_top_category_label(item.get("top_category", "")) for item in items
-    }
+    labels = {normalize_top_category_label(item.get("top_category", "")) for item in items}
     return sorted(labels, key=lambda s: s.casefold())
 
 
@@ -446,20 +444,14 @@ def generate_filtered_xlsx(
     ws.sheet_properties.outlinePr.summaryBelow = False
 
     # --- Стили ---
-    col_header_fill = PatternFill(
-        start_color="1F4E79", end_color="1F4E79", fill_type="solid"
-    )
+    col_header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
     col_header_font = Font(bold=True, color="FFFFFF", size=11)
 
     cat_fill = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")
     cat_font = Font(bold=True, color="FFFFFF", size=11)
 
-    row_fill_even = PatternFill(
-        start_color="DEEAF1", end_color="DEEAF1", fill_type="solid"
-    )
-    row_fill_odd = PatternFill(
-        start_color="FFFFFF", end_color="FFFFFF", fill_type="solid"
-    )
+    row_fill_even = PatternFill(start_color="DEEAF1", end_color="DEEAF1", fill_type="solid")
+    row_fill_odd = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
     red_fill = PatternFill(start_color="FFE0E0", end_color="FFE0E0", fill_type="solid")
 
     col_widths = [40, 20, 12, 12]
@@ -495,9 +487,7 @@ def generate_filtered_xlsx(
         group_list = list(group)
 
         # --- Строка заголовка категории ---
-        cat_cell = ws.cell(
-            row=current_row, column=1, value=f"  {category}  ({len(group_list)} поз.)"
-        )
+        cat_cell = ws.cell(row=current_row, column=1, value=f"  {category}  ({len(group_list)} поз.)")
         cat_cell.font = cat_font
         cat_cell.fill = cat_fill
         cat_cell.alignment = Alignment(vertical="center")

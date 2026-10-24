@@ -72,8 +72,7 @@ def _mail_imap_max_message_age_days() -> Optional[int]:
         v = int(stripped, 10)
     except ValueError as e:
         raise EnvironmentError(
-            "Переменная MAIL_IMAP_MAX_MESSAGE_AGE_DAYS должна быть целым числом, "
-            f"получено: {raw!r}"
+            "Переменная MAIL_IMAP_MAX_MESSAGE_AGE_DAYS должна быть целым числом, " f"получено: {raw!r}"
         ) from e
     if v <= 0:
         return None
@@ -113,17 +112,13 @@ def _optional_int_env(key: str) -> Optional[int]:
     try:
         return int(stripped, 10)
     except ValueError as e:
-        raise EnvironmentError(
-            f"Переменная {key} должна быть целым числом или пустой, получено: {raw!r}"
-        ) from e
+        raise EnvironmentError(f"Переменная {key} должна быть целым числом или пустой, получено: {raw!r}") from e
 
 
 # Уведомления о порогах по группе (docs/fourty_role.md).
 # Не задано — отправка алертов пропускается.
 # Личка: пороги по группам + xlsx «ушли в ноль» (docs/push_message_about_zero.md).
-STOCK_LIMIT_ALERT_CHAT_ID: Optional[int] = _optional_int_env(
-    "STOCK_LIMIT_ALERT_CHAT_ID"
-)
+STOCK_LIMIT_ALERT_CHAT_ID: Optional[int] = _optional_int_env("STOCK_LIMIT_ALERT_CHAT_ID")
 
 # --- Параметры фильтрации ---
 STOCK_THRESHOLD: int = int(os.getenv("STOCK_THRESHOLD", "5"))

@@ -18,8 +18,12 @@ def _make_candidate(
     parsed_fn: date | None,
     email_dt: datetime,
     msg_id: bytes = b"1",
-) -> object:
-    """Собирает ``_StockArchiveCandidate`` с минимальным фиктивным ``msg``."""
+):
+    """Собирает ``_StockArchiveCandidate`` с минимальным фиктивным ``msg``.
+
+    :returns: Кандидат для :func:`_pick_best_stock_candidate`.
+    :rtype: parser.mail_fetcher._StockArchiveCandidate
+    """
     from parser.mail_fetcher import _StockArchiveCandidate
 
     msg = email.message.EmailMessage()
@@ -103,12 +107,8 @@ def test_parse_date_iso_and_ddmm(monkeypatch: pytest.MonkeyPatch) -> None:
 
     from parser.mail_fetcher import _parse_date_after_stock_prefix
 
-    assert _parse_date_after_stock_prefix("Остатки от 31.03.2026.zip") == date(
-        2026, 3, 31
-    )
-    assert _parse_date_after_stock_prefix("Остатки от 2026-03-31.zip") == date(
-        2026, 3, 31
-    )
+    assert _parse_date_after_stock_prefix("Остатки от 31.03.2026.zip") == date(2026, 3, 31)
+    assert _parse_date_after_stock_prefix("Остатки от 2026-03-31.zip") == date(2026, 3, 31)
 
 
 def test_effective_stock_date_rejects_bad_without_date(

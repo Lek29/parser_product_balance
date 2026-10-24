@@ -66,8 +66,11 @@ def _to_map(rows: list[dict]) -> dict[str, dict]:
     """key → {group, brand, name, quantity}; дубликаты — max qty."""
     out: dict[str, dict] = {}
     for raw in rows:
+        qty_raw = raw.get("quantity")
+        if qty_raw is None:
+            continue
         try:
-            qty = int(raw.get("quantity"))
+            qty = int(qty_raw)
         except (TypeError, ValueError):
             continue
         # снимок уже с key/group; parse_stock — top_category
@@ -90,9 +93,7 @@ def _to_map(rows: list[dict]) -> dict[str, dict]:
     return out
 
 
-def find_zero_sold(
-    prev_positions: list[dict], curr_items: list[dict]
-) -> list[ZeroSoldHit]:
+def find_zero_sold(prev_positions: list[dict], curr_items: list[dict]) -> list[ZeroSoldHit]:
     """
     Было qty > 0 → сейчас 0 или позиции нет.
 
@@ -257,10 +258,7 @@ def _run(all_items: list[dict]) -> None:
     _save_week_snapshot(week_to, all_items)
 
     state = _load_state()
-    if (
-        state.get("last_compared_from") == week_from
-        and state.get("last_compared_to") == week_to
-    ):
+    if state.get("last_compared_from") == week_from and state.get("last_compared_to") == week_to:
         logger.info("zero_sold skip already_compared %s→%s", week_from, week_to)
         return
 
@@ -283,10 +281,7 @@ def _run(all_items: list[dict]) -> None:
     filename = f"ушли_в_ноль_{today.isoformat()}.xlsx"
     path = os.path.join(config.TEMP_DIR, filename)
     _write_xlsx(hits, path)
-    caption = (
-        f"Ушли в 0 относительно прошлой недели "
-        f"({week_from} → {week_to}): {len(hits)} поз."
-    )
+    caption = f"Ушли в 0 относительно прошлой недели " f"({week_from} → {week_to}): {len(hits)} поз."
     sent = send_zero_sold_xlsx(path, caption=caption, filename=filename)
     if sent:
         _save_state(week_from, week_to)

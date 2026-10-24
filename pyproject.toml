@@ -13,7 +13,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=2.4.0",
+    "pre-commit>=4.7.0",
     "pytest>=8.0",
+    "ruff>=0.17.2",
 ]
 
 [tool.pytest.ini_options]
@@ -33,3 +36,8 @@ exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "PIE"]
+
+# mypy: без stubs у openpyxl/rarfile/apscheduler; строгие arg-type всё ещё ловим.
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

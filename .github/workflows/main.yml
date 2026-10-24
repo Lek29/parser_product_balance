@@ -17,9 +17,25 @@ jobs:
       - name: Run Ruff
         run: uvx ruff check .
 
+  # Пирамида A: быстрые unit/integration pytest до сборки образа
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Run pytest
+        run: uv run pytest tests/ -q
+
   build:
     name: Build and Push Docker Image
-    needs: lint
+    needs: [lint, test]
     runs-on: ubuntu-latest
     permissions:
       contents: read

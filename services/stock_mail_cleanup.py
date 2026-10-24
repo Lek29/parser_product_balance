@@ -97,10 +97,7 @@ def plan_deletions(imap) -> tuple[Optional[bytes], set[bytes], list[str]]:
         if keeper_id is not None and c.msg_id == keeper_id:
             continue
         to_delete.add(c.msg_id)
-        lines.append(
-            f"DELETE (лишний архив остатков) id={_msg_id_label(c.msg_id)} "
-            f"file={c.filename!r}"
-        )
+        lines.append(f"DELETE (лишний архив остатков) id={_msg_id_label(c.msg_id)} " f"file={c.filename!r}")
 
     _select_mail_folder(imap)
     _, msg_ids_raw = imap.search(None, "ALL")
@@ -119,13 +116,11 @@ def plan_deletions(imap) -> tuple[Optional[bytes], set[bytes], list[str]]:
         if msg_day < week_start:
             to_delete.add(msg_id)
             lines.append(
-                f"DELETE (старше недели) id={_msg_id_label(msg_id)} "
-                f"Date={raw!r} day={msg_day.isoformat()}"
+                f"DELETE (старше недели) id={_msg_id_label(msg_id)} " f"Date={raw!r} day={msg_day.isoformat()}"
             )
 
     lines.append(
-        f"Итого к удалению: {len(to_delete)}; папка={config.EMAIL_IMAP_FOLDER!r}; "
-        f"писем в папке: {len(all_ids)}"
+        f"Итого к удалению: {len(to_delete)}; папка={config.EMAIL_IMAP_FOLDER!r}; " f"писем в папке: {len(all_ids)}"
     )
     return keeper_id, to_delete, lines
 
@@ -199,6 +194,4 @@ def run_stock_mail_cleanup(*, execute: bool = False) -> int:
             try:
                 imap.logout()
             except Exception:
-                logger.debug(
-                    "IMAP logout при cleanup завершился с ошибкой", exc_info=True
-                )
+                logger.debug("IMAP logout при cleanup завершился с ошибкой", exc_info=True)

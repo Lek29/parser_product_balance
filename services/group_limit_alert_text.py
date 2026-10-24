@@ -112,10 +112,7 @@ def _build_alerts_html(
     :rtype: Optional[str]
     """
     blocks: list[str] = []
-    preamble = (
-        "⚠️ <b>Остатки по лимитам групп</b>\n"
-        "<i>Позиции с количеством ≤ заданного лимита.</i>\n"
-    )
+    preamble = "⚠️ <b>Остатки по лимитам групп</b>\n" "<i>Позиции с количеством ≤ заданного лимита.</i>\n"
 
     for v in violations:
         positions = v.get("positions") or []

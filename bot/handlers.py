@@ -379,9 +379,7 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if _is_locked_out(chat_id):
         until = _lockout_until.get(chat_id, 0)
         remaining = max(0, int(until - time.monotonic()))
-        await msg.reply_text(
-            f"🚫 Слишком много неверных попыток.\n\nПовторите через {remaining} сек."
-        )
+        await msg.reply_text(f"🚫 Слишком много неверных попыток.\n\nПовторите через {remaining} сек.")
         return
 
     entered = (msg.text or "").strip()
@@ -403,13 +401,10 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         count = _record_failed_attempt(chat_id)
         remaining_attempts = max(0, MAX_AUTH_ATTEMPTS - count)
         if remaining_attempts > 0:
-            await msg.reply_text(
-                f"❌ Неверный пароль. Осталось попыток: {remaining_attempts}."
-            )
+            await msg.reply_text(f"❌ Неверный пароль. Осталось попыток: {remaining_attempts}.")
         else:
             await msg.reply_text(
-                f"🚫 Слишком много неверных попыток.\n\n"
-                f"Повторите через {AUTH_LOCKOUT_SECONDS} сек."
+                f"🚫 Слишком много неверных попыток.\n\n" f"Повторите через {AUTH_LOCKOUT_SECONDS} сек."
             )
         logger.warning(
             "Неверный пароль от пользователя %d (попытка %d/%d).",
@@ -468,9 +463,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await msg.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
 
-async def handle_start_button(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def handle_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Хэндлер нажатия reply-кнопки «▶️ Start».
 
@@ -487,9 +480,7 @@ async def handle_start_button(
     """
     msg = _text_message(update)
     if not msg:
-        logger.warning(
-            "handle_start_button: нет сообщения (update_id=%s).", update.update_id
-        )
+        logger.warning("handle_start_button: нет сообщения (update_id=%s).", update.update_id)
         return
 
     chat_id = update.effective_chat.id
@@ -558,9 +549,7 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # SKIPPED_TODAY — IMAP не вызывался: снимок свеж в календарной неделе МСК
         if outcome == MailFetchOutcome.SKIPPED_TODAY:
-            await query.edit_message_text(
-                "⏳ Локальные данные этой недели — сверяю кэш таблицы..."
-            )
+            await query.edit_message_text("⏳ Локальные данные этой недели — сверяю кэш таблицы...")
             all_count, filtered_count = run_parse_and_save_filtered()
             reset_session_to_global(context)
             status = get_status_text()
@@ -580,9 +569,7 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # NO_CHANGES — IMAP проверен, нового письма нет
         if outcome == MailFetchOutcome.NO_CHANGES:
-            await query.edit_message_text(
-                "⏳ Новых писем нет — сверяю локальный кэш таблицы..."
-            )
+            await query.edit_message_text("⏳ Новых писем нет — сверяю локальный кэш таблицы...")
             all_count, filtered_count = run_parse_and_save_filtered()
             reset_session_to_global(context)
             status = get_status_text()
@@ -846,8 +833,7 @@ async def cb_group_limit_start(
     if get_filter_mode(context) == FilterMode.GROUP_LIMIT_SETUP:
         await _edit_callback_message_safe(
             query,
-            "🎚 *Лимиты по группам* уже открыты.\n\n"
-            "Продолжайте на *reply-клавиатуре* внизу чата.",
+            "🎚 *Лимиты по группам* уже открыты.\n\n" "Продолжайте на *reply-клавиатуре* внизу чата.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=main_keyboard(),
         )
@@ -951,8 +937,7 @@ async def cb_group_limit_threshold(
         clear_gl_pending_group_index(context)
         set_gl_wizard_step(context, GroupLimitWizardStep.GROUPS_LIST)
         await query.edit_message_text(
-            f"🗑 Лимит для группы <b>{html_escape(gname)}</b> снят.\n\n"
-            "Выберите другую группу на клавиатуре.",
+            f"🗑 Лимит для группы <b>{html_escape(gname)}</b> снят.\n\n" "Выберите другую группу на клавиатуре.",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -961,8 +946,7 @@ async def cb_group_limit_threshold(
         set_gl_pending_group_index(context, idx)
         set_gl_wizard_step(context, GroupLimitWizardStep.AWAITING_LIMIT_TEXT)
         await query.edit_message_text(
-            f"✏️ Группа: <b>{html_escape(gname)}</b>\n\n"
-            "Введите целое число ≥ 0 — лимит остатка (включительно).",
+            f"✏️ Группа: <b>{html_escape(gname)}</b>\n\n" "Введите целое число ≥ 0 — лимит остатка (включительно).",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -1026,8 +1010,7 @@ async def cb_partial_threshold(
         set_pending_group_index(context, idx)
         set_wizard_step(context, PartialWizardStep.AWAITING_THRESHOLD_TEXT)
         await query.edit_message_text(
-            f"✏️ Группа: <b>{html_escape(gname)}</b>\n\n"
-            "Введите целое число — порог остатка (неотрицательное).",
+            f"✏️ Группа: <b>{html_escape(gname)}</b>\n\n" "Введите целое число — порог остатка (неотрицательное).",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -1101,8 +1084,7 @@ async def _partial_apply(
         rules = {g: int(config.STOCK_THRESHOLD) for g in order}
         used_global_fallback = True
         logger.info(
-            "Частичная выгрузка: черновик пуст — применён общий порог ≤%s шт. "
-            "ко всем %d группам (chat_id=%s).",
+            "Частичная выгрузка: черновик пуст — применён общий порог ≤%s шт. " "ко всем %d группам (chat_id=%s).",
             config.STOCK_THRESHOLD,
             len(rules),
             chat_id,
@@ -1122,8 +1104,7 @@ async def _partial_apply(
 
         if not filtered:
             logger.warning(
-                "Частичная выгрузка: 0 позиций после фильтра "
-                "(правил_групп=%d, chat_id=%s). Файл не отправляется.",
+                "Частичная выгрузка: 0 позиций после фильтра " "(правил_групп=%d, chat_id=%s). Файл не отправляется.",
                 len(rules),
                 chat_id,
             )
@@ -1167,8 +1148,7 @@ async def _partial_apply(
                 exc_info=True,
             )
             await msg.reply_text(
-                "❌ Не удалось отправить файл в Telegram. Попробуйте ещё раз "
-                "или проверьте размер/сеть.",
+                "❌ Не удалось отправить файл в Telegram. Попробуйте ещё раз " "или проверьте размер/сеть.",
                 reply_markup=groups_reply_keyboard(get_groups_order(context)),
             )
             return
@@ -1531,8 +1511,7 @@ async def handle_partial_messages(
 
     set_wizard_step(context, PartialWizardStep.THRESHOLD_FOR_GROUP)
     await msg.reply_text(
-        f"Группа: <b>{html_escape(gname)}</b>\n"
-        "Выберите порог остатка для этой группы (частичная выгрузка Excel):",
+        f"Группа: <b>{html_escape(gname)}</b>\n" "Выберите порог остатка для этой группы (частичная выгрузка Excel):",
         parse_mode=ParseMode.HTML,
         reply_markup=partial_threshold_inline_keyboard(idx),
     )
@@ -1580,13 +1559,9 @@ def register_handlers(app: Application) -> None:
         CallbackQueryHandler(cb_partial_start, pattern=f"^{CB_PARTIAL_START}$"),
     )
     app.add_handler(CallbackQueryHandler(cb_actualize, pattern=f"^{CB_ACTUALIZE}$"))
-    app.add_handler(
-        CallbackQueryHandler(cb_get_filtered, pattern=f"^{CB_GET_FILTERED}$")
-    )
+    app.add_handler(CallbackQueryHandler(cb_get_filtered, pattern=f"^{CB_GET_FILTERED}$"))
     # Reply-кнопка Start — до частичного сценария и пароля
-    app.add_handler(
-        MessageHandler(filters.Regex(f"^{START_BUTTON_TEXT}$"), handle_start_button)
-    )
+    app.add_handler(MessageHandler(filters.Regex(f"^{START_BUTTON_TEXT}$"), handle_start_button))
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,

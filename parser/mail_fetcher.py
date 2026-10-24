@@ -370,14 +370,9 @@ def _select_mail_folder(imap: imaplib.IMAP4_SSL) -> None:
         detail = ""
         if data:
             first = data[0]
-            detail = (
-                first.decode("utf-8", errors="replace").strip()
-                if isinstance(first, bytes)
-                else str(first)
-            )
+            detail = first.decode("utf-8", errors="replace").strip() if isinstance(first, bytes) else str(first)
         logger.error(
-            "Не удалось открыть IMAP-папку %r (ответ сервера: %s). "
-            "Проверьте EMAIL_IMAP_FOLDER.",
+            "Не удалось открыть IMAP-папку %r (ответ сервера: %s). " "Проверьте EMAIL_IMAP_FOLDER.",
             folder,
             detail or typ,
         )
@@ -481,9 +476,7 @@ def collect_stock_archive_candidates(
             continue
 
         date_str = headers.get("Date", "")
-        stop_scan, date_unparsed = _scan_should_stop_before_rfc822(
-            date_str, max_msg_age, today
-        )
+        stop_scan, date_unparsed = _scan_should_stop_before_rfc822(date_str, max_msg_age, today)
         if date_unparsed and max_msg_age is not None:
             logger.warning(
                 "Заголовок Date не разобран, ранний выход по окну (%s дн.) не "
@@ -493,8 +486,7 @@ def collect_stock_archive_candidates(
             )
         if stop_scan:
             logger.info(
-                "Окно по дате письма (%s дн.): письмо id=%s старше окна (Date=%s), "
-                "обход остановлен.",
+                "Окно по дате письма (%s дн.): письмо id=%s старше окна (Date=%s), " "обход остановлен.",
                 max_msg_age,
                 msg_id.decode("ascii", errors="replace"),
                 date_str,
@@ -603,9 +595,7 @@ def _find_latest_archive_attachment(
     if best is None:
         return None, None, None
     parsed_label = (
-        best.parsed_filename_date.isoformat()
-        if best.parsed_filename_date is not None
-        else "fallback: дата письма"
+        best.parsed_filename_date.isoformat() if best.parsed_filename_date is not None else "fallback: дата письма"
     )
     logger.info(
         "Выбран архив остатков: %s (эффективная дата %s; разбор имени: %s). Всего кандидатов: %d",
@@ -617,9 +607,7 @@ def _find_latest_archive_attachment(
     return best.msg, best.filename, best.email_date
 
 
-def _download_archive(
-    msg: email.message.Message, archive_filename: str
-) -> Optional[str]:
+def _download_archive(msg: email.message.Message, archive_filename: str) -> Optional[str]:
     """
     Скачивает вложение-архив из письма во временную папку temp/.
 
@@ -643,7 +631,8 @@ def _download_archive(
             continue
 
         payload = part.get_payload(decode=True)
-        if payload:
+        # get_payload(decode=True) типизирован широко; на диск пишем только байты.
+        if isinstance(payload, (bytes, bytearray)) and payload:
             with open(save_path, "wb") as f:
                 f.write(payload)
             logger.info("Архив сохранён: %s (%d байт)", save_path, len(payload))
@@ -681,8 +670,7 @@ def _extract_xlsx_from_archive(archive_path: str) -> Optional[str]:
     elif archive_path.lower().endswith(".rar"):
         if not RAR_SUPPORT:
             raise RuntimeError(
-                "Архив имеет формат .rar, но модуль rarfile не установлен. "
-                "Выполните: pip install rarfile"
+                "Архив имеет формат .rar, но модуль rarfile не установлен. " "Выполните: pip install rarfile"
             )
         with rarfile.RarFile(archive_path, "r") as rf:
             for name in rf.namelist():
@@ -806,7 +794,8 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
 
         msg, archive_filename, email_date = _find_latest_archive_attachment(imap)
 
-        if msg is None:
+        # Кортеж всегда согласован: либо все None, либо все заданы.
+        if msg is None or archive_filename is None or email_date is None:
             # Писем нет — фиксируем дату проверки, повторная проверка сегодня бессмысленна
             set_last_check_date(today)
             logger.warning("Подходящих писем не найдено. Завершение.")
@@ -824,8 +813,7 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
         archive_path = _download_archive(msg, archive_filename)
         if archive_path is None:
             logger.error(
-                "MAIL_FETCH_ARCHIVE_FAILURE: не удалось скачать вложение из письма "
-                "(вложение: %s).",
+                "MAIL_FETCH_ARCHIVE_FAILURE: не удалось скачать вложение из письма " "(вложение: %s).",
                 archive_filename,
             )
             return MailFetchOutcome.ARCHIVE_FAILURE

@@ -48,10 +48,7 @@ def fetch_and_parse() -> None:
         outcome = fetch_and_save()
 
         if outcome == MailFetchOutcome.SKIPPED_TODAY:
-            logger.info(
-                "Планировщик: IMAP пропущен — локальный снимок свеж "
-                "(календарная неделя МСК)."
-            )
+            logger.info("Планировщик: IMAP пропущен — локальный снимок свеж " "(календарная неделя МСК).")
             return
 
         if outcome == MailFetchOutcome.ARCHIVE_FAILURE:
@@ -78,9 +75,7 @@ def fetch_and_parse() -> None:
         )
 
     except Exception as e:
-        logger.error(
-            "Планировщик: ошибка при выполнении fetch_and_parse: %s", e, exc_info=True
-        )
+        logger.error("Планировщик: ошибка при выполнении fetch_and_parse: %s", e, exc_info=True)
 
 
 def weekly_group_limit_revision() -> None:

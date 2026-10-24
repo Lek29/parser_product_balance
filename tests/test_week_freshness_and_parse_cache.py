@@ -39,17 +39,13 @@ def test_parse_meta_date_iso_and_date() -> None:
     assert parse_meta_date(None) is None
 
 
-def test_local_snapshot_fresh_same_week(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_local_snapshot_fresh_same_week(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """current.xlsx + last_check_date в той же неделе МСК → fresh."""
     xlsx = tmp_path / "current.xlsx"
     xlsx.write_bytes(b"PK\x03\x04fake")
     meta = tmp_path / "meta.json"
     meta.write_text(
-        json.dumps(
-            {"last_check_date": "2026-10-21", "updated_at": "2026-10-21T10:00:00"}
-        ),
+        json.dumps({"last_check_date": "2026-10-21", "updated_at": "2026-10-21T10:00:00"}),
         encoding="utf-8",
     )
     monkeypatch.setattr(config, "CURRENT_XLSX_PATH", str(xlsx))
@@ -64,9 +60,7 @@ def test_local_snapshot_fresh_same_week(
     assert is_local_mail_snapshot_fresh_this_week(reference=ref_next) is False
 
 
-def test_data_json_fingerprint_cache(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_data_json_fingerprint_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """save_items пишет отпечаток; совпадение с current.xlsx → cache hit."""
     xlsx = tmp_path / "current.xlsx"
     _write_minimal_stock_xlsx(xlsx)
@@ -94,9 +88,7 @@ def test_data_json_fingerprint_cache(
     assert data_json_matches_current_xlsx() is False
 
 
-def test_run_parse_uses_cache_skips_parse_stock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_parse_uses_cache_skips_parse_stock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """При валидном кэше parse_stock не вызывается."""
     xlsx = tmp_path / "current.xlsx"
     _write_minimal_stock_xlsx(xlsx)
@@ -138,9 +130,7 @@ def test_run_parse_uses_cache_skips_parse_stock(
     assert filt_n == 1
 
 
-def test_filtered_xlsx_ready_for_send(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_filtered_xlsx_ready_for_send(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Готовый filtered + валидный data.json → ready."""
     xlsx = tmp_path / "current.xlsx"
     _write_minimal_stock_xlsx(xlsx)
