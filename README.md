@@ -108,7 +108,7 @@ EMAIL_IMAP_SERVER=imap.yandex.ru
 # Порог остатка (позиции с количеством <= этого значения попадают в выгрузку)
 STOCK_THRESHOLD=5
 
-# Опционально: куда слать алерты по лимитам товарных групп (см. docs/fourty_role.md)
+# Опционально: алерты лимитов групп, zero-sold и Red Bin (docs/fourty_role.md, docs/red_bin.md)
 # STOCK_LIMIT_ALERT_CHAT_ID=-1001234567890
 ```
 
@@ -123,7 +123,7 @@ STOCK_THRESHOLD=5
 | `MAIL_IMAP_MAX_MESSAGE_AGE_DAYS` | ❌ | Окно по дате письма в днях для обхода; по умолчанию `7`; `0` или меньше — перебор всей папки |
 | `MAIL_STOCK_ARCHIVE_PREFIX` | ❌ | Префикс имени вложения с остатками; по умолчанию `Остатки от ` |
 | `STOCK_THRESHOLD` | ❌ | Порог малого остатка, по умолчанию `5` |
-| `STOCK_LIMIT_ALERT_CHAT_ID` | ❌ | Личный Telegram chat id: пороги по группам + xlsx «ушли в ноль»; не задан — оба канала выключены |
+| `STOCK_LIMIT_ALERT_CHAT_ID` | ❌ | Личный Telegram chat id: пороги по группам, xlsx «ушли в ноль» и Red Bin; не задан — каналы выключены |
 
 ### Почта: папка IMAP и окно по дате письма
 

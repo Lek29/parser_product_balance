@@ -117,7 +117,7 @@ def _optional_int_env(key: str) -> Optional[int]:
 
 # Уведомления о порогах по группе (docs/fourty_role.md).
 # Не задано — отправка алертов пропускается.
-# Личка: пороги по группам + xlsx «ушли в ноль» (docs/push_message_about_zero.md).
+# Личка: пороги по группам + xlsx «ушли в ноль» + Red Bin (docs/red_bin.md).
 STOCK_LIMIT_ALERT_CHAT_ID: Optional[int] = _optional_int_env("STOCK_LIMIT_ALERT_CHAT_ID")
 
 # --- Параметры фильтрации ---
@@ -142,5 +142,7 @@ GROUP_STOCK_LIMITS_JSON_PATH: str = os.path.join(
     STORAGE_DIR,
     "group_stock_limits.json",
 )
+# Точечные лимиты Red Bin (docs/red_bin.md). Рядом с лимитами групп, не внутри них.
+RED_BIN_JSON_PATH: str = os.path.join(STORAGE_DIR, "red_bin.json")
 WEEKLY_SNAPSHOTS_DIR: str = os.path.join(STORAGE_DIR, "weekly_snapshots")
 ZERO_SOLD_STATE_JSON_PATH: str = os.path.join(STORAGE_DIR, "zero_sold_state.json")

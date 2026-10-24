@@ -22,6 +22,7 @@ storage/auth.json
 storage/filtered.xlsx
 storage/weekly_snapshots/
 storage/zero_sold_state.json
+storage/red_bin.json
 
 # Логи
 *.log

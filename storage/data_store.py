@@ -622,6 +622,199 @@ def clear_limit(group_key: str) -> None:
     logger.info("Лимит для группы %s снят.", normalized_group)
 
 
+def _empty_red_bin_payload() -> dict[str, Any]:
+    """Пустой реестр Red Bin: следующий id с 1, позиций нет."""
+    return {"next_id": 1, "items": {}}
+
+
+def _load_red_bin_payload() -> dict[str, Any]:
+    """
+    Читает ``storage/red_bin.json``. Битый файл даёт пустой реестр, не падает.
+
+    :returns: ``{"next_id", "items"}``. ``items`` — ``id -> запись``.
+    :rtype: dict[str, Any]
+    """
+    path = config.RED_BIN_JSON_PATH
+    if not os.path.exists(path):
+        return _empty_red_bin_payload()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except json.JSONDecodeError as e:
+        logger.error("red_bin.json повреждён: %s. Пустой реестр.", e)
+        return _empty_red_bin_payload()
+    if not isinstance(raw, dict):
+        return _empty_red_bin_payload()
+    items_raw = raw.get("items")
+    if not isinstance(items_raw, dict):
+        items_raw = {}
+    items: dict[str, dict] = {}
+    max_id = 0
+    for raw_id, rec in items_raw.items():
+        if not isinstance(rec, dict):
+            continue
+        key = str(rec.get("key") or "").strip()
+        if not key:
+            continue
+        try:
+            limit = int(rec["limit"])
+            rank = int(rec.get("rank") or 0)
+            last_qty = int(rec.get("last_qty") or 0)
+            item_id = str(int(raw_id))
+        except (TypeError, ValueError, KeyError):
+            continue
+        if limit < 1:
+            continue
+        items[item_id] = {
+            "key": key,
+            "group": str(rec.get("group") or ""),
+            "brand": str(rec.get("brand") or ""),
+            "name": str(rec.get("name") or ""),
+            "limit": limit,
+            "rank": max(0, min(3, rank)),
+            "last_qty": last_qty,
+        }
+        max_id = max(max_id, int(item_id))
+    try:
+        next_id = int(raw.get("next_id") or 0)
+    except (TypeError, ValueError):
+        next_id = 0
+    if next_id <= max_id:
+        next_id = max_id + 1
+    return {"next_id": next_id, "items": items}
+
+
+def _write_red_bin_payload(payload: dict[str, Any]) -> None:
+    """
+    Атомарно пишет реестр Red Bin.
+
+    :param payload: ``next_id`` и ``items``.
+    :type payload: dict[str, Any]
+    :returns: None
+    :side effects: Перезаписывает ``storage/red_bin.json``.
+    """
+    body = {
+        "updated_at": datetime.now().isoformat(),
+        "next_id": int(payload["next_id"]),
+        "items": payload["items"],
+    }
+    atomic_write_json(config.RED_BIN_JSON_PATH, body, ensure_ascii=False, indent=2)
+
+
+def list_red_bin() -> dict[str, dict]:
+    """
+    Все позиции под точечным надзором.
+
+    :returns: ``id -> запись`` (key, group, brand, name, limit, rank, last_qty).
+    :rtype: dict[str, dict]
+
+    :example:
+    >>> list_red_bin()
+    {}
+    """
+    return _load_red_bin_payload()["items"]
+
+
+def save_red_bin_items(items: dict[str, dict]) -> None:
+    """
+    Перезаписывает позиции реестра, не сдвигая ``next_id`` назад.
+
+    Нужна машине стадий после снимка: rank и last_qty уже посчитаны снаружи.
+
+    :param items: Словарь ``id -> запись``, как у :func:`list_red_bin`.
+    :type items: dict[str, dict]
+    :returns: None
+    :side effects: ``storage/red_bin.json``.
+    """
+    payload = _load_red_bin_payload()
+    payload["items"] = items
+    _write_red_bin_payload(payload)
+
+
+def upsert_red_bin(item_fields: dict[str, Any], limit: int) -> str:
+    """
+    Ставит или меняет лимит одной позиции. Сообщений не шлёт.
+
+    Существующий ключ: меняется только ``limit``, rank пересчитывается
+    от уже сохранённого ``last_qty``. Новый ключ получает rank от
+    ``item_fields["last_qty"]`` — тихая база на момент выбора.
+
+    :param item_fields: ``key``, ``group``, ``brand``, ``name``, ``last_qty``.
+    :type item_fields: dict[str, Any]
+    :param limit: Целое ``>= 1``.
+    :type limit: int
+    :returns: Строковый id записи.
+    :rtype: str
+    :raises ValueError: Лимит меньше 1 или у новой позиции нет ``last_qty``.
+    :side effects: ``storage/red_bin.json``.
+
+    :example:
+    >>> upsert_red_bin(
+    ...     {"key": "мячи|mikasa|мяч", "group": "Мячи", "brand": "Mikasa",
+    ...      "name": "Мяч", "last_qty": 15},
+    ...     5,
+    ... )
+    '1'
+    """
+    from services.red_bin import zone_rank
+
+    limit_n = int(limit)
+    if limit_n < 1:
+        raise ValueError("Лимит Red Bin должен быть целым >= 1.")
+    key = str(item_fields.get("key") or "").strip()
+    if not key:
+        raise ValueError("У позиции Red Bin нет ключа.")
+
+    payload = _load_red_bin_payload()
+    items: dict[str, dict] = payload["items"]
+    existing_id = next((iid for iid, rec in items.items() if rec.get("key") == key), None)
+    if existing_id is not None:
+        rec = items[existing_id]
+        last_qty = int(rec.get("last_qty") or 0)
+        rec["limit"] = limit_n
+        rec["rank"] = zone_rank(last_qty, limit_n)
+        _write_red_bin_payload(payload)
+        logger.info("Red Bin id=%s лимит обновлён до %d (без алерта).", existing_id, limit_n)
+        return existing_id
+
+    try:
+        last_qty = int(item_fields["last_qty"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise ValueError("Для новой позиции Red Bin нужен last_qty.") from e
+    item_id = str(int(payload["next_id"]))
+    payload["next_id"] = int(payload["next_id"]) + 1
+    items[item_id] = {
+        "key": key,
+        "group": str(item_fields.get("group") or ""),
+        "brand": str(item_fields.get("brand") or ""),
+        "name": str(item_fields.get("name") or ""),
+        "limit": limit_n,
+        "rank": zone_rank(last_qty, limit_n),
+        "last_qty": last_qty,
+    }
+    _write_red_bin_payload(payload)
+    logger.info("Red Bin id=%s поставлен на надзор, лимит %d.", item_id, limit_n)
+    return item_id
+
+
+def clear_red_bin(item_id: str) -> None:
+    """
+    Снимает одну позицию с надзора. Неизвестный id — тихий выход.
+
+    :param item_id: Id из :func:`list_red_bin`.
+    :type item_id: str
+    :returns: None
+    :side effects: ``storage/red_bin.json``, если запись была.
+    """
+    payload = _load_red_bin_payload()
+    items: dict[str, dict] = payload["items"]
+    removed = items.pop(str(item_id), None)
+    if removed is None:
+        return
+    _write_red_bin_payload(payload)
+    logger.info("Red Bin id=%s снят.", item_id)
+
+
 def is_authorized(chat_id: int) -> bool:
     """
     Проверяет, авторизован ли пользователь с указанным chat_id.

@@ -8,6 +8,7 @@
 - CB_GET_FILTERED — генерация и отправка отфильтрованного Excel-файла (только для авторизованных)
 - CB_PARTIAL_START / reply-группы / callback порогов — частичная фильтрация по группам
 - CB_GROUP_LIMIT_START / reply-группы / callback ``glt:`` — лимиты по группам (алерты)
+- CB_RED_BIN_START / кнопки группа → бренд → товар / callback ``rb:`` — точечный Red Bin
 
 Все хэндлеры асинхронные (python-telegram-bot v20+).
 Ошибки перехватываются и сообщаются пользователю без падения бота.
@@ -44,9 +45,12 @@ from bot.keyboards import (
     CB_GET_FILTERED,
     CB_GROUP_LIMIT_START,
     CB_PARTIAL_START,
+    CB_RED_BIN_START,
     LIMIT_REPLY_MENU_TEXT,
     PARTIAL_REPLY_APPLY_TEXT,
     PARTIAL_REPLY_CANCEL_TEXT,
+    RED_BIN_LIST_TEXT,
+    RED_BIN_PAGE_SIZE,
     START_BUTTON_TEXT,
     group_limit_threshold_inline_keyboard,
     groups_reply_keyboard,
@@ -54,15 +58,22 @@ from bot.keyboards import (
     normalize_reply_button_text,
     parse_group_limit_callback,
     parse_partial_threshold_callback,
+    parse_red_bin_callback,
     partial_threshold_inline_keyboard,
+    red_bin_browse_keyboard,
+    red_bin_export_keyboard,
+    red_bin_limit_keyboard,
+    red_bin_reply_keyboard,
     start_keyboard,
 )
 from bot.partial_filter_state import (
     FilterMode,
     GroupLimitWizardStep,
     PartialWizardStep,
+    RedBinStep,
     clear_gl_pending_group_index,
     clear_pending_group_index,
+    clear_red_bin_pending_index,
     get_filter_mode,
     get_gl_groups_order,
     get_gl_pending_group_index,
@@ -70,6 +81,13 @@ from bot.partial_filter_state import (
     get_groups_order,
     get_partial_thresholds,
     get_pending_group_index,
+    get_red_bin_brand,
+    get_red_bin_group,
+    get_red_bin_line,
+    get_red_bin_matches,
+    get_red_bin_pending_index,
+    get_red_bin_step,
+    get_red_bin_tree,
     get_wizard_step,
     gl_group_index_by_reply_label,
     gl_group_name_by_index,
@@ -77,21 +95,32 @@ from bot.partial_filter_state import (
     group_name_by_index,
     init_group_limit_session,
     init_partial_session,
+    init_red_bin_session,
     is_known_product_group_reply_text,
     reset_session_to_global,
     set_gl_pending_group_index,
     set_gl_wizard_step,
     set_partial_threshold,
     set_pending_group_index,
+    set_red_bin_brand,
+    set_red_bin_group,
+    set_red_bin_line,
+    set_red_bin_matches,
+    set_red_bin_pending_index,
+    set_red_bin_step,
+    set_red_bin_tree,
     set_wizard_step,
 )
 from storage.data_store import (
     authorize,
     clear_limit,
+    clear_red_bin,
     get_limit,
     get_status_text,
     is_authorized,
+    list_red_bin,
     set_limit,
+    upsert_red_bin,
 )
 
 logger = logging.getLogger(__name__)
@@ -334,7 +363,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "👋 *Парсер остатков*\n\n"
         f"📊 {status}\n\n"
         f"🎚 Порог отображения: `<= {config.STOCK_THRESHOLD}` шт.\n\n"
-        "Уведомления по лимитам групп и еженедельная ревизия — в `/help`."
+        "Уведомления по лимитам групп, Red Bin и еженедельная ревизия — в `/help`."
     )
     await msg.reply_text(
         text,
@@ -439,7 +468,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"≤ `{config.STOCK_THRESHOLD}` шт.\n"
         "🔀 *Частичная фильтрация* — разные пороги по группам товаров.\n"
         "🎚 *Лимиты по группам* — пороги для *уведомлений* о малых остатках "
-        "по группе (см. блок ниже).\n\n"
+        "по группе (см. блок ниже).\n"
+        "🔴 *Red Bin* — лимит на *одну* позицию: сообщения, когда остаток "
+        "дошёл до лимита, когда его начали продавать и когда стало 0.\n\n"
         "*Пороги по группам — уведомления*\n"
         "Для товарной группы задаётся лимит (целое число шт.). Если по "
         "позиции в этой группе остаток *не выше* лимита, бот формирует "
@@ -452,6 +483,16 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "неделю выполняется ревизия остатков по этим лимитам (и проверки "
         "после обновления данных). После снятия лимита группа с надзора "
         "снимается.\n\n"
+        "*Red Bin*\n"
+        "Кнопками: группа → бренд → модель (мячи → Mikasa → мяч Mikasa MV300), "
+        "затем лимит. Длинный список листается стрелками, «Назад» — на уровень выше. "
+        "Пресеты `10` / `5` / `3` или своё число ≥ 1. "
+        "*Снять* — на карточке товара. *Список* — все лимиты в чат или файлом.\n"
+        "На следующем полном обновлении остатков бот пишет в служебный чат:\n"
+        "• остаток стал равен лимиту;\n"
+        "• остаток стал меньше лимита (один раз, пока не пополнят);\n"
+        "• остаток 0 или строка пропала из файла.\n"
+        "Пока остаток ползёт внутри корзины (4→3→2), новых сообщений нет.\n\n"
         "🔒 Для работы с ботом требуется авторизация по паролю."
     )
     msg = _text_message(update)
@@ -498,7 +539,7 @@ async def handle_start_button(update: Update, context: ContextTypes.DEFAULT_TYPE
         "👋 *Парсер остатков*\n\n"
         f"📊 {status}\n\n"
         f"🎚 Порог отображения: `<= {config.STOCK_THRESHOLD}` шт.\n\n"
-        "Уведомления по лимитам групп и еженедельная ревизия — в `/help`."
+        "Уведомления по лимитам групп, Red Bin и еженедельная ревизия — в `/help`."
     )
     await msg.reply_text(
         text,
@@ -1334,6 +1375,704 @@ async def handle_group_limit_messages(
     raise ApplicationHandlerStop
 
 
+def _red_bin_id_for_key(key: str) -> str | None:
+    """
+    Id записи Red Bin с тем же K1 или ``None``.
+
+    :param key: Ключ :func:`services.zero_sold.make_position_key`.
+    :type key: str
+    :returns: Id или ``None``.
+    :rtype: str | None
+    """
+    for item_id, rec in list_red_bin().items():
+        if rec.get("key") == key:
+            return item_id
+    return None
+
+
+def _red_bin_match_at(context: ContextTypes.DEFAULT_TYPE, index: int) -> dict | None:
+    """
+    Строка последней выдачи поиска по индексу callback.
+
+    :param context: Контекст хэндлера.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :param index: Индекс ``rb:<idx>``.
+    :type index: int
+    :returns: Словарь совпадения или ``None``.
+    :rtype: dict | None
+    """
+    matches = get_red_bin_matches(context)
+    if index < 0 or index >= len(matches):
+        return None
+    match = matches[index]
+    return match if isinstance(match, dict) else None
+
+
+def _red_bin_fields(match: dict) -> dict:
+    """
+    Поля для :func:`storage.data_store.upsert_red_bin` из строки поиска.
+
+    :param match: Совпадение с ``key``, ``group``, ``brand``, ``name``, ``quantity``.
+    :type match: dict
+    :returns: Словарь с ``last_qty``.
+    :rtype: dict
+    """
+    return {
+        "key": match["key"],
+        "group": match.get("group") or "",
+        "brand": match.get("brand") or "",
+        "name": match.get("name") or "",
+        "last_qty": int(match["quantity"]),
+    }
+
+
+def _red_bin_saved_text(name: str, limit: int, qty: int) -> str:
+    """
+    Подтверждение установки лимита без отправки предупреждения.
+
+    :param name: Название позиции.
+    :type name: str
+    :param limit: Установленный лимит.
+    :type limit: int
+    :param qty: Остаток на момент выбора.
+    :type qty: int
+    :returns: HTML.
+    :rtype: str
+    """
+    return (
+        f"✅ <b>{html_escape(name)}</b>: лимит <code>{limit}</code>, "
+        f"сейчас <code>{qty}</code>.\n"
+        f"Дальше: на {limit} / ниже {limit} / на 0."
+    )
+
+
+def _red_bin_catalog() -> list[dict]:
+    """
+    Текущий снимок остатков для поиска и списка.
+
+    :returns: Позиции ``parse_stock``.
+    :rtype: list[dict]
+    :raises FileNotFoundError: Нет ``current.xlsx``.
+    """
+    from parser.excel_parser import parse_stock
+
+    return parse_stock()
+
+
+def _red_bin_report_rows() -> list[dict]:
+    """
+    Все позиции Red Bin с лимитом и остатком из текущего файла.
+
+    :returns: Строки для чата и xlsx.
+    :rtype: list[dict]
+    """
+    from services.red_bin import index_snapshot, red_bin_report_rows
+
+    stock: dict = {}
+    if os.path.isfile(config.CURRENT_XLSX_PATH):
+        try:
+            stock = index_snapshot(_red_bin_catalog())
+        except Exception:
+            logger.error("Red Bin: снимок для выгрузки не прочитан.", exc_info=True)
+    return red_bin_report_rows(list_red_bin(), stock)
+
+
+def _red_bin_page_title(title: str, total: int, page: int) -> str:
+    """
+    Заголовок уровня каталога. Номер страницы добавляется, только если их больше одной.
+
+    :param title: HTML-заголовок уровня.
+    :type title: str
+    :param total: Сколько кнопок на уровне.
+    :type total: int
+    :param page: Страница с нуля.
+    :type page: int
+    :returns: Заголовок, возможно с ``· 2/5``.
+    :rtype: str
+    """
+    pages = max(1, (total + RED_BIN_PAGE_SIZE - 1) // RED_BIN_PAGE_SIZE) if total else 1
+    if pages > 1:
+        shown = min(max(page, 0), pages - 1) + 1
+        return f"{title} · {shown}/{pages}"
+    return title
+
+
+def _red_bin_groups_view(context: ContextTypes.DEFAULT_TYPE, page: int) -> tuple[str, object]:
+    """
+    Текст и кнопки групп.
+
+    :param context: Контекст хэндлера с уже записанным каталогом.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :param page: Страница с нуля.
+    :type page: int
+    :returns: ``(html, клавиатура)``.
+    :rtype: tuple[str, object]
+    :side effects: Шаг сессии становится ``GROUPS``.
+    """
+    groups = list(get_red_bin_tree(context))
+    set_red_bin_step(context, RedBinStep.GROUPS)
+    return (
+        _red_bin_page_title("Выберите группу", len(groups), page),
+        red_bin_browse_keyboard("g", groups, page, back=False),
+    )
+
+
+def _red_bin_brands_view(context: ContextTypes.DEFAULT_TYPE, page: int) -> tuple[str, object] | None:
+    """
+    Текст и кнопки брендов выбранной группы.
+
+    :param context: Контекст хэндлера.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :param page: Страница с нуля.
+    :type page: int
+    :returns: Пара для сообщения или ``None``, если группа в каталоге пропала.
+    :rtype: tuple[str, object] | None
+    :side effects: Шаг сессии становится ``BRANDS``.
+    """
+    tree = get_red_bin_tree(context)
+    group = get_red_bin_group(context)
+    if not group or group not in tree:
+        return None
+    brands = list(tree[group])
+    set_red_bin_step(context, RedBinStep.BRANDS)
+    title = f"<b>{html_escape(group)}</b>"
+    return (
+        _red_bin_page_title(title, len(brands), page),
+        red_bin_browse_keyboard("b", brands, page, back=True),
+    )
+
+
+def _red_bin_lines(context: ContextTypes.DEFAULT_TYPE) -> dict | None:
+    """
+    Бренды indent 10 текущего раздела или ``None``, если шаг потерял родителей.
+
+    :param context: Контекст хэндлера.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :returns: ``имя бренда → список моделей``.
+    :rtype: dict | None
+    """
+    tree = get_red_bin_tree(context)
+    group = get_red_bin_group(context)
+    section = get_red_bin_brand(context)
+    if not group or not section or group not in tree or section not in tree[group]:
+        return None
+    lines = tree[group][section]
+    return lines if isinstance(lines, dict) else None
+
+
+def _red_bin_lines_view(context: ContextTypes.DEFAULT_TYPE, page: int) -> tuple[str, object] | None:
+    """
+    Кнопки брендов (indent 10): Jogel, Mikasa.
+
+    :param context: Контекст хэндлера.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :param page: Страница с нуля.
+    :type page: int
+    :returns: Пара для сообщения или ``None``.
+    :rtype: tuple[str, object] | None
+    :side effects: Шаг ``LINES``.
+    """
+    lines = _red_bin_lines(context)
+    if lines is None:
+        return None
+    names = list(lines)
+    group = get_red_bin_group(context) or ""
+    section = get_red_bin_brand(context) or ""
+    set_red_bin_step(context, RedBinStep.LINES)
+    title = f"<b>{html_escape(group)}</b> → <b>{html_escape(section)}</b>\nВыберите бренд"
+    return (
+        _red_bin_page_title(title, len(names), page),
+        red_bin_browse_keyboard("l", names, page, back=True),
+    )
+
+
+def _red_bin_line_models(context: ContextTypes.DEFAULT_TYPE) -> list | None:
+    """
+    Модели выбранного бренда.
+
+    :param context: Контекст хэндлера.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :returns: Список позиций или ``None``.
+    :rtype: list | None
+    """
+    lines = _red_bin_lines(context)
+    line = get_red_bin_line(context)
+    if lines is None or not line or line not in lines:
+        return None
+    models = lines[line]
+    return list(models) if isinstance(models, list) else None
+
+
+def _red_bin_products_view(context: ContextTypes.DEFAULT_TYPE, page: int) -> tuple[str, object] | None:
+    """
+    Кнопки моделей выбранного бренда (indent 12).
+
+    Список кладётся в сессию целиком: callback несёт индекс, не имя.
+
+    :param context: Контекст хэндлера.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :param page: Страница с нуля.
+    :type page: int
+    :returns: Пара для сообщения или ``None``, если бренд в каталоге пропал.
+    :rtype: tuple[str, object] | None
+    :side effects: Шаг ``PRODUCTS`` и :func:`set_red_bin_matches`.
+    """
+    products = _red_bin_line_models(context)
+    if products is None:
+        return None
+    set_red_bin_matches(context, products)
+    set_red_bin_step(context, RedBinStep.PRODUCTS)
+    labels = [f"{row.get('name') or ''} · {row.get('quantity')}" for row in products]
+    line = get_red_bin_line(context) or ""
+    title = f"<b>{html_escape(line)}</b>\nВыберите модель"
+    return (
+        _red_bin_page_title(title, len(labels), page),
+        red_bin_browse_keyboard("p", labels, page, back=True),
+    )
+
+
+async def _edit_red_bin_level(query, text: str, markup: object) -> None:
+    """
+    Меняет сообщение каталога Red Bin на другой уровень или страницу.
+
+    :param query: CallbackQuery.
+    :type query: telegram.CallbackQuery
+    :param text: HTML-текст.
+    :type text: str
+    :param markup: Inline-клавиатура уровня.
+    :type markup: object
+    :returns: None
+    """
+    await _edit_callback_message_safe(
+        query,
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=markup,
+    )
+
+
+async def cb_red_bin_start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """
+    Вход в Red Bin: сразу кнопки групп, дальше бренд и товар.
+
+    :param update: Callback кнопки «Red Bin».
+    :type update: Update
+    :param context: Контекст хэндлера.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :returns: None
+    :side effects: :func:`init_red_bin_session`, каталог в ``user_data``, сообщения в чат.
+    """
+    from services.red_bin import browse_tree
+
+    query = update.callback_query
+    if not await _answer_callback_query_safe(query):
+        await _notify_telegram_network_unreachable(context, query)
+        return
+    if not _check_auth(query.message.chat_id):
+        await _edit_callback_message_safe(query, _NOT_AUTH_TEXT)
+        return
+    if get_filter_mode(context) == FilterMode.RED_BIN:
+        await _edit_callback_message_safe(
+            query,
+            "🔴 *Red Bin* уже открыт.\n\nЖмите кнопки в чате или «В меню».",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=main_keyboard(),
+        )
+        return
+    if not os.path.isfile(config.CURRENT_XLSX_PATH):
+        await _edit_callback_message_safe(
+            query,
+            "📭 Нет файла остатков.\n\nСначала нажмите «Актуализировать остатки».",
+            reply_markup=main_keyboard(),
+        )
+        return
+    try:
+        tree = browse_tree(_red_bin_catalog())
+    except Exception:
+        logger.error("Red Bin: каталог не прочитан.", exc_info=True)
+        await _edit_callback_message_safe(
+            query,
+            "❌ Не удалось прочитать таблицу остатков.\n\nПопробуйте позже.",
+            reply_markup=main_keyboard(),
+        )
+        return
+    if not tree:
+        await _edit_callback_message_safe(
+            query,
+            "📭 В файле нет товарных позиций.\n\nАктуализируйте остатки.",
+            reply_markup=main_keyboard(),
+        )
+        return
+    init_red_bin_session(context)
+    set_red_bin_tree(context, tree)
+    text, markup = _red_bin_groups_view(context, 0)
+    await _edit_callback_message_safe(
+        query,
+        "🔴 *Red Bin*\n\n"
+        "Лимит на *одну модель*. Кнопками: группа → бренд → модель, "
+        "затем `10` / `5` / `3` или свой.\n"
+        "*«Назад»* — на уровень выше. *«Список»* и *«В меню»* — внизу.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=main_keyboard(),
+    )
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=markup,
+    )
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="«Список» и «В меню» — на клавиатуре внизу.",
+        reply_markup=red_bin_reply_keyboard(),
+    )
+
+
+def _red_bin_limit_text(match: dict) -> str:
+    """
+    Текст карточки лимита: имя, остаток, текущий порог если уже стоит.
+
+    :param match: Строка каталога с ``key``, ``name``, ``quantity``.
+    :type match: dict
+    :returns: HTML.
+    :rtype: str
+    """
+    watched = _red_bin_id_for_key(str(match["key"]))
+    extra = ""
+    if watched:
+        current = list_red_bin().get(watched) or {}
+        extra = f"\nУже в корзине, лимит <code>{current.get('limit')}</code>."
+    return (
+        f"<b>{html_escape(str(match.get('name') or ''))}</b> · "
+        f"сейчас <code>{match.get('quantity')}</code>.{extra}\n\nВыберите лимит:"
+    )
+
+
+async def _red_bin_export(query, context: ContextTypes.DEFAULT_TYPE, kind: str) -> None:
+    """
+    Выгружает все лимиты Red Bin в чат или xlsx.
+
+    :param query: Callback «В чат» / «Скачать файл».
+    :type query: telegram.CallbackQuery
+    :param context: Контекст хэндлера.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :param kind: ``chat`` или ``file``.
+    :type kind: str
+    :returns: None
+    :side effects: Сообщения или документ в чат, временный xlsx удаляется.
+    """
+    import tempfile
+
+    from services.red_bin import format_red_bin_report_html, write_red_bin_xlsx
+
+    rows = _red_bin_report_rows()
+    if not rows:
+        await query.edit_message_text("Red Bin пуст.")
+        return
+    if kind == "chat":
+        messages = format_red_bin_report_html(rows)
+        await query.edit_message_text(messages[0], parse_mode=ParseMode.HTML)
+        for extra in messages[1:]:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=extra,
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    fd, path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+    try:
+        write_red_bin_xlsx(rows, path)
+        await query.edit_message_text(f"Файл: {len(rows)} поз. с лимитом.")
+        with open(path, "rb") as handle:
+            await context.bot.send_document(
+                chat_id=query.message.chat_id,
+                document=handle,
+                filename="red_bin_лимиты.xlsx",
+                caption=f"Red Bin: {len(rows)} поз. с лимитом",
+            )
+    except Exception:
+        logger.error("Red Bin: не удалось отправить xlsx.", exc_info=True)
+        await query.edit_message_text("Не удалось собрать файл. Попробуйте ещё раз.")
+    finally:
+        if os.path.isfile(path):
+            os.remove(path)
+
+
+async def cb_red_bin(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """
+    Callback каталога Red Bin: группа, бренд, товар, лимит, снятие.
+
+    :param update: Callback ``rb:``.
+    :type update: Update
+    :param context: Контекст хэндлера.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :returns: None
+    :side effects: ``storage/red_bin.json``, правка сообщения.
+    """
+    query = update.callback_query
+    if not await _answer_callback_query_safe(query):
+        await _notify_telegram_network_unreachable(context, query)
+        return
+    if not _check_auth(query.message.chat_id):
+        await query.edit_message_text(_NOT_AUTH_TEXT)
+        return
+    if get_filter_mode(context) != FilterMode.RED_BIN:
+        await query.edit_message_text("Сессия устарела. Отправьте /start.")
+        return
+    parsed = parse_red_bin_callback(query.data or "")
+    if not parsed:
+        return
+
+    if parsed[0] == "clear_id":
+        clear_red_bin(parsed[1])
+        left = len(list_red_bin())
+        await query.edit_message_text(f"Снято. В Red Bin осталось {left}.")
+        return
+
+    if parsed[0] == "export":
+        await _red_bin_export(query, context, parsed[1])
+        return
+
+    if parsed[0] == "page":
+        level, page = parsed[1], int(parsed[2])
+        view = {
+            "g": _red_bin_groups_view,
+            "b": _red_bin_brands_view,
+            "l": _red_bin_lines_view,
+            "p": _red_bin_products_view,
+        }[level](context, page)
+        if view is None:
+            await query.edit_message_text("Список устарел. Откройте Red Bin заново.")
+            return
+        await _edit_red_bin_level(query, view[0], view[1])
+        return
+
+    if parsed[0] == "group":
+        groups = list(get_red_bin_tree(context))
+        idx = int(parsed[1])
+        if idx < 0 or idx >= len(groups):
+            await query.edit_message_text("Список устарел. Откройте Red Bin заново.")
+            return
+        set_red_bin_group(context, groups[idx])
+        view = _red_bin_brands_view(context, 0)
+        if view is None:
+            await query.edit_message_text("Список устарел. Откройте Red Bin заново.")
+            return
+        await _edit_red_bin_level(query, view[0], view[1])
+        return
+
+    if parsed[0] == "brand":
+        group = get_red_bin_group(context)
+        brands = list(get_red_bin_tree(context).get(group or "", {}))
+        idx = int(parsed[1])
+        if idx < 0 or idx >= len(brands):
+            await query.edit_message_text("Список устарел. Откройте Red Bin заново.")
+            return
+        set_red_bin_brand(context, brands[idx])
+        view = _red_bin_lines_view(context, 0)
+        if view is None:
+            await query.edit_message_text("Список устарел. Откройте Red Bin заново.")
+            return
+        await _edit_red_bin_level(query, view[0], view[1])
+        return
+
+    if parsed[0] == "line":
+        lines = _red_bin_lines(context) or {}
+        names = list(lines)
+        idx = int(parsed[1])
+        if idx < 0 or idx >= len(names):
+            await query.edit_message_text("Список устарел. Откройте Red Bin заново.")
+            return
+        line_name = names[idx]
+        set_red_bin_line(context, line_name)
+        models = list(lines[line_name])
+        has_models = any(int(row.get("indent") or 10) >= 12 for row in models)
+        if not has_models and len(models) == 1:
+            set_red_bin_matches(context, models)
+            set_red_bin_step(context, RedBinStep.LIMIT)
+            await query.edit_message_text(
+                _red_bin_limit_text(models[0]),
+                parse_mode=ParseMode.HTML,
+                reply_markup=red_bin_limit_keyboard(0),
+            )
+            return
+        view = _red_bin_products_view(context, 0)
+        if view is None:
+            await query.edit_message_text("Список устарел. Откройте Red Bin заново.")
+            return
+        await _edit_red_bin_level(query, view[0], view[1])
+        return
+
+    if parsed[0] == "up":
+        step = get_red_bin_step(context)
+        if step == RedBinStep.AWAITING_LIMIT:
+            index = get_red_bin_pending_index(context)
+            match = _red_bin_match_at(context, index) if index is not None else None
+            if match is None or index is None:
+                view = _red_bin_products_view(context, 0)
+            else:
+                set_red_bin_step(context, RedBinStep.LIMIT)
+                await query.edit_message_text(
+                    _red_bin_limit_text(match),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=red_bin_limit_keyboard(index),
+                )
+                return
+        elif step == RedBinStep.LIMIT:
+            clear_red_bin_pending_index(context)
+            models = _red_bin_line_models(context) or []
+            has_models = any(int(row.get("indent") or 10) >= 12 for row in models)
+            view = _red_bin_products_view(context, 0) if has_models else _red_bin_lines_view(context, 0)
+        elif step == RedBinStep.PRODUCTS:
+            view = _red_bin_lines_view(context, 0)
+        elif step == RedBinStep.LINES:
+            view = _red_bin_brands_view(context, 0)
+        else:
+            view = _red_bin_groups_view(context, 0)
+        if view is None:
+            await query.edit_message_text("Список устарел. Откройте Red Bin заново.")
+            return
+        await _edit_red_bin_level(query, view[0], view[1])
+        return
+
+    index = int(parsed[1])
+    match = _red_bin_match_at(context, index)
+    if match is None:
+        await query.edit_message_text("Список устарел. Откройте Red Bin заново.")
+        return
+
+    if parsed[0] == "pick":
+        set_red_bin_step(context, RedBinStep.LIMIT)
+        await query.edit_message_text(
+            _red_bin_limit_text(match),
+            parse_mode=ParseMode.HTML,
+            reply_markup=red_bin_limit_keyboard(index),
+        )
+        return
+
+    value = parsed[2]
+    if value == "clear":
+        watched = _red_bin_id_for_key(str(match["key"]))
+        if watched:
+            clear_red_bin(watched)
+            note = f"🗑 <b>{html_escape(str(match.get('name') or ''))}</b> снят с Red Bin."
+        else:
+            note = "Лимит для этой позиции не был задан."
+        clear_red_bin_pending_index(context)
+        view = _red_bin_products_view(context, 0)
+        if view is None:
+            await query.edit_message_text(note, parse_mode=ParseMode.HTML)
+            return
+        await _edit_red_bin_level(query, note + "\n\n" + view[0], view[1])
+        return
+
+    if value == "custom":
+        set_red_bin_pending_index(context, index)
+        set_red_bin_step(context, RedBinStep.AWAITING_LIMIT)
+        await query.edit_message_text(
+            f"✏️ <b>{html_escape(str(match.get('name') or ''))}</b>\n\n"
+            "Введите целое число ≥ 1 — сколько штук держать в корзине.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=red_bin_browse_keyboard("p", [], 0, back=True),
+        )
+        return
+
+    if isinstance(value, int):
+        upsert_red_bin(_red_bin_fields(match), value)
+        clear_red_bin_pending_index(context)
+        note = _red_bin_saved_text(str(match.get("name") or ""), value, int(match["quantity"]))
+        view = _red_bin_products_view(context, 0)
+        if view is None:
+            await query.edit_message_text(note, parse_mode=ParseMode.HTML)
+            return
+        await _edit_red_bin_level(query, note + "\n\n" + view[0], view[1])
+
+
+async def handle_red_bin_messages(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """
+    Текст в режиме Red Bin: свой лимит, список надзора, выход в меню.
+
+    Название текстом больше не ищется — товар выбирается inline-кнопками.
+
+    :param update: Текстовое сообщение.
+    :type update: Update
+    :param context: Контекст хэндлера.
+    :type context: ContextTypes.DEFAULT_TYPE
+    :returns: None
+    :raises ApplicationHandlerStop: Сообщение обработано здесь.
+    """
+    msg = _text_message(update)
+    if not msg or not msg.text:
+        return
+    if not _check_auth(update.effective_chat.id):
+        return
+    if get_filter_mode(context) != FilterMode.RED_BIN:
+        return
+
+    raw_text = msg.text.strip()
+    text = normalize_reply_button_text(raw_text)
+    list_n = normalize_reply_button_text(RED_BIN_LIST_TEXT)
+    menu_n = normalize_reply_button_text(LIMIT_REPLY_MENU_TEXT)
+
+    if text == menu_n:
+        reset_session_to_global(context)
+        await msg.reply_text("Red Bin закрыт.", reply_markup=start_keyboard())
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Выберите действие:",
+            reply_markup=main_keyboard(),
+        )
+        raise ApplicationHandlerStop
+
+    if text == list_n:
+        rows = _red_bin_report_rows()
+        if not rows:
+            await msg.reply_text("Red Bin пуст.")
+            raise ApplicationHandlerStop
+        await msg.reply_text(
+            f"Позиций с лимитом: {len(rows)}. Куда вывести?",
+            reply_markup=red_bin_export_keyboard(),
+        )
+        raise ApplicationHandlerStop
+
+    if get_red_bin_step(context) == RedBinStep.AWAITING_LIMIT:
+        index = get_red_bin_pending_index(context)
+        match = _red_bin_match_at(context, index) if index is not None else None
+        if match is None:
+            clear_red_bin_pending_index(context)
+            await msg.reply_text("Сессия ввода сброшена. Выберите товар кнопками ещё раз.")
+            raise ApplicationHandlerStop
+        try:
+            limit = int(raw_text)
+            if limit < 1:
+                raise ValueError
+        except ValueError:
+            await msg.reply_text("Введите целое число ≥ 1.")
+            raise ApplicationHandlerStop
+        upsert_red_bin(_red_bin_fields(match), limit)
+        clear_red_bin_pending_index(context)
+        note = _red_bin_saved_text(str(match.get("name") or ""), limit, int(match["quantity"]))
+        view = _red_bin_products_view(context, 0)
+        await msg.reply_text(note, parse_mode=ParseMode.HTML)
+        if view is not None:
+            await msg.reply_text(view[0], parse_mode=ParseMode.HTML, reply_markup=view[1])
+        raise ApplicationHandlerStop
+
+    await msg.reply_text("Выберите группу, бренд и товар кнопками в чате.")
+    raise ApplicationHandlerStop
+
+
 async def handle_group_and_partial_text(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1364,6 +2103,10 @@ async def handle_group_and_partial_text(
         await handle_group_limit_messages(update, context)
     except ApplicationHandlerStop:
         raise
+    try:
+        await handle_red_bin_messages(update, context)
+    except ApplicationHandlerStop:
+        raise
 
 
 async def handle_partial_messages(
@@ -1390,6 +2133,9 @@ async def handle_partial_messages(
         return
 
     if not _check_auth(update.effective_chat.id):
+        return
+
+    if get_filter_mode(context) == FilterMode.RED_BIN:
         return
 
     chat_id = update.effective_chat.id
@@ -1515,11 +2261,11 @@ def register_handlers(app: Application) -> None:
 
     Порядок регистрации важен:
     1. Команды (/start, /help) — первыми, чтобы telegram не путал с текстом.
-    2. Callback: ``glt:`` и ``group_limit_start``, частичная фильтрация
-       (``pft:``, ``partial_start``), затем актуализация и общий Excel.
+    2. Callback: ``rb:`` / Red Bin, ``glt:`` и ``group_limit_start``, частичная
+       фильтрация (``pft:``, ``partial_start``), затем актуализация и общий Excel.
     3. Reply «▶️ Start» — до мастеров и пароля.
-    4. Текст: ``handle_group_and_partial_text`` (лимиты по группам + частичная
-       фильтрация подряд; из-за ограничения PTB v20 — один ``MessageHandler``).
+    4. Текст: ``handle_group_and_partial_text`` (частичная фильтрация, лимиты
+       групп и Red Bin подряд; из-за ограничения PTB v20 — один ``MessageHandler``).
     5. MessageHandler для пароля — последним.
 
     :param app: Экземпляр Application из python-telegram-bot.
@@ -1538,6 +2284,10 @@ def register_handlers(app: Application) -> None:
         CommandHandler("strat", cmd_start, filters=_COMMAND_FILTERS),
     )  # опечатка /strat → как /start
     app.add_handler(CommandHandler("help", cmd_help, filters=_COMMAND_FILTERS))
+    app.add_handler(CallbackQueryHandler(cb_red_bin, pattern=r"^rb:"))
+    app.add_handler(
+        CallbackQueryHandler(cb_red_bin_start, pattern=f"^{CB_RED_BIN_START}$"),
+    )
     app.add_handler(CallbackQueryHandler(cb_group_limit_threshold, pattern=r"^glt:"))
     app.add_handler(
         CallbackQueryHandler(

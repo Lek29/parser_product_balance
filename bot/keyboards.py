@@ -9,7 +9,8 @@
 ``groups_reply_keyboard``, ``partial_threshold_inline_keyboard``,
 ``parse_partial_threshold_callback``. Лимиты по группам (алерты):
 четвёртая кнопка меню, ``group_limit_threshold_inline_keyboard``,
-``parse_group_limit_callback``.
+``parse_group_limit_callback``. Red Bin (точечный лимит): пятая кнопка меню,
+``red_bin_reply_keyboard``, ``red_bin_browse_keyboard``, ``parse_red_bin_callback``.
 """
 
 import re
@@ -32,6 +33,9 @@ CB_PARTIAL_START = "partial_start"
 
 # Вход в мастер лимитов по группам (постоянные пороги, docs/fourty_role.md)
 CB_GROUP_LIMIT_START = "group_limit_start"
+
+# Вход в точечный надзор Red Bin (docs/red_bin.md)
+CB_RED_BIN_START = "red_bin_start"
 
 # Текст постоянной кнопки Start (должен точно совпадать
 # с фильтром filters.Regex в handlers.py)
@@ -89,6 +93,19 @@ _PARTIAL_THRESHOLD_CB_RE = re.compile(r"^pft:(\d+):(\d+|x)$")
 # Префикс callback лимита по группе: ``glt:<i>:10|5|3|x|c>`` (c — снять лимит)
 GROUP_LIMIT_CB_PREFIX = "glt"
 _GROUP_LIMIT_CB_RE = re.compile(r"^glt:(\d+):(10|5|3|x|c)$")
+
+# Red Bin: группа ``rb:g``, раздел ``rb:b``, бренд ``rb:l``, страница ``*p``,
+# назад ``rb:up``, модель ``rb:<idx>``, лимит ``rb:<idx>:10|5|3|x|c``,
+# снятие из списка ``rb:id:<id>:c``.
+RED_BIN_LIST_TEXT = "📋 Список"
+RED_BIN_PRESETS: tuple[int, ...] = (10, 5, 3)
+# shortcut: 8 кнопок на страницу; поднять, если листать длинный бренд надоело.
+RED_BIN_PAGE_SIZE: int = 8
+_RED_BIN_PICK_RE = re.compile(r"^rb:(\d+)$")
+_RED_BIN_LIMIT_RE = re.compile(r"^rb:(\d+):(10|5|3|x|c)$")
+_RED_BIN_CLEAR_RE = re.compile(r"^rb:id:(\d+):c$")
+_RED_BIN_PAGE_RE = re.compile(r"^rb:([gblp])p:(\d+)$")
+_RED_BIN_LEVEL_RE = re.compile(r"^rb:([gbl]):(\d+)$")
 
 # Две кнопки в ряд для названий групп (компактно и читаемо).
 GROUP_BUTTONS_PER_ROW = 2
@@ -148,6 +165,64 @@ def parse_group_limit_callback(
     return (idx, int(raw))
 
 
+def parse_red_bin_callback(
+    callback_data: str,
+) -> Optional[tuple]:
+    """
+    Разбирает callback Red Bin.
+
+    ``rb:g:<i>`` / ``rb:b:<i>`` / ``rb:l:<i>`` — группа, раздел, бренд.
+    ``rb:gp|bp|lp|pp:<page>`` — страница того же уровня.
+    ``rb:up`` — на уровень выше.
+    ``rb:<idx>`` — открыть лимит товара.
+    ``rb:<idx>:10|5|3|x|c`` — пресет, свой ввод или снять.
+    ``rb:id:<id>:c`` — снять запись из списка надзора.
+    ``rb:out:chat`` / ``rb:out:file`` — выгрузка всех лимитов.
+
+    :param callback_data: Значение из ``CallbackQuery``.
+    :type callback_data: str
+    :returns: ``("group"|"brand"|"line", idx)``, ``("page", "g"|"b"|"l"|"p", page)``,
+              ``("up",)``, ``("export", "chat"|"file")``, ``("pick", idx)``,
+              ``("limit", idx, int|"custom"|"clear")``,
+              ``("clear_id", id)`` или ``None``.
+    :rtype: Optional[tuple]
+    :side effects: Нет.
+    """
+    if not callback_data:
+        return None
+    data = callback_data.strip()
+    if data == "rb:up":
+        return ("up",)
+    if data == "rb:out:chat":
+        return ("export", "chat")
+    if data == "rb:out:file":
+        return ("export", "file")
+    cleared = _RED_BIN_CLEAR_RE.match(data)
+    if cleared:
+        return ("clear_id", cleared.group(1))
+    limited = _RED_BIN_LIMIT_RE.match(data)
+    if limited:
+        raw = limited.group(2)
+        if raw == "x":
+            value: Union[int, str] = "custom"
+        elif raw == "c":
+            value = "clear"
+        else:
+            value = int(raw)
+        return ("limit", int(limited.group(1)), value)
+    paged = _RED_BIN_PAGE_RE.match(data)
+    if paged:
+        return ("page", paged.group(1), int(paged.group(2)))
+    level = _RED_BIN_LEVEL_RE.match(data)
+    if level:
+        kind = {"g": "group", "b": "brand", "l": "line"}[level.group(1)]
+        return (kind, int(level.group(2)))
+    picked = _RED_BIN_PICK_RE.match(data)
+    if picked:
+        return ("pick", int(picked.group(1)))
+    return None
+
+
 def start_keyboard() -> ReplyKeyboardMarkup:
     """
     Возвращает reply-клавиатуру с кнопкой «▶️ Start».
@@ -196,6 +271,7 @@ def main_keyboard() -> InlineKeyboardMarkup:
     Третья — вход в частичную фильтрацию по группам.
     Четвёртая — лимиты по группам для уведомлений
     (см. ``docs/fourty_role.md``).
+    Пятая — Red Bin, точечный лимит одной позиции (``docs/red_bin.md``).
 
     :returns: Объект InlineKeyboardMarkup для передачи в reply_markup.
     :rtype: InlineKeyboardMarkup
@@ -228,6 +304,12 @@ def main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(
                 "🎚 Лимиты по группам",
                 callback_data=CB_GROUP_LIMIT_START,
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔴 Red Bin",
+                callback_data=CB_RED_BIN_START,
             )
         ],
     ]
@@ -354,3 +436,113 @@ def group_limit_threshold_inline_keyboard(
         [InlineKeyboardButton("🗑 Снять лимит", callback_data=clear_cb)],
     ]
     return InlineKeyboardMarkup(rows)
+
+
+def red_bin_reply_keyboard() -> ReplyKeyboardMarkup:
+    """
+    Reply-клавиатура Red Bin: список надзора и выход в меню.
+
+    Группа, бренд и товар выбираются inline-кнопками, не этой клавиатурой.
+
+    :returns: Разметка с двумя кнопками.
+    :rtype: ReplyKeyboardMarkup
+    :side effects: Нет.
+    """
+    return ReplyKeyboardMarkup(
+        [
+            [
+                KeyboardButton(RED_BIN_LIST_TEXT),
+                KeyboardButton(LIMIT_REPLY_MENU_TEXT),
+            ],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
+def red_bin_browse_keyboard(
+    level: str,
+    labels: list[str],
+    page: int,
+    *,
+    back: bool,
+) -> InlineKeyboardMarkup:
+    """
+    Одна страница кнопок каталога Red Bin.
+
+    ``level`` — ``g`` (группа), ``b`` (раздел), ``l`` (бренд) или ``p`` (модель).
+    Модель зовёт ``rb:<idx>``. Остальные уровни — ``rb:g|b|l:<idx>``.
+    Листание — ``rb:gp|bp|lp|pp:<page>``. Индекс в callback
+    абсолютный, не номер на странице.
+
+    :param level: ``g``, ``b`` или ``p``.
+    :type level: str
+    :param labels: Подписи всех кнопок уровня, не только текущей страницы.
+    :type labels: list[str]
+    :param page: Номер страницы с нуля. Меньше нуля и дальше конца прижимаются.
+    :type page: int
+    :param back: Добавить «Назад» (на группах не нужен).
+    :type back: bool
+    :returns: Inline-клавиатура.
+    :rtype: InlineKeyboardMarkup
+    :side effects: Нет.
+    """
+    size = RED_BIN_PAGE_SIZE
+    total = len(labels)
+    pages = max(1, (total + size - 1) // size) if total else 1
+    page = min(max(page, 0), pages - 1)
+    start = page * size
+    rows: list[list[InlineKeyboardButton]] = []
+    for offset, label in enumerate(labels[start : start + size]):
+        idx = start + offset
+        text = label if len(label) <= 60 else label[:59] + "…"
+        data = f"rb:{idx}" if level == "p" else f"rb:{level}:{idx}"
+        rows.append([InlineKeyboardButton(text or "—", callback_data=data)])
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("«", callback_data=f"rb:{level}p:{page - 1}"))
+    if back:
+        nav.append(InlineKeyboardButton("↩️ Назад", callback_data="rb:up"))
+    if start + size < total:
+        nav.append(InlineKeyboardButton("»", callback_data=f"rb:{level}p:{page + 1}"))
+    if nav:
+        rows.append(nav)
+    return InlineKeyboardMarkup(rows)
+
+
+def red_bin_export_keyboard() -> InlineKeyboardMarkup:
+    """
+    Куда вывести все позиции Red Bin с лимитом: сообщением или xlsx.
+
+    :returns: Две inline-кнопки.
+    :rtype: InlineKeyboardMarkup
+    :side effects: Нет.
+    """
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("В чат", callback_data="rb:out:chat"),
+                InlineKeyboardButton("Скачать файл", callback_data="rb:out:file"),
+            ]
+        ]
+    )
+
+
+def red_bin_limit_keyboard(index: int) -> InlineKeyboardMarkup:
+    """
+    Пресеты 10/5/3, свой лимит и снятие для строки поиска ``index``.
+
+    :param index: Индекс в выдаче сессии.
+    :type index: int
+    :returns: Inline-клавиатура.
+    :rtype: InlineKeyboardMarkup
+    """
+    presets = [InlineKeyboardButton(str(preset), callback_data=f"rb:{index}:{preset}") for preset in RED_BIN_PRESETS]
+    return InlineKeyboardMarkup(
+        [
+            presets,
+            [InlineKeyboardButton("✏️ Свой лимит", callback_data=f"rb:{index}:x")],
+            [InlineKeyboardButton("🗑 Снять", callback_data=f"rb:{index}:c")],
+            [InlineKeyboardButton("↩️ Назад", callback_data="rb:up")],
+        ]
+    )

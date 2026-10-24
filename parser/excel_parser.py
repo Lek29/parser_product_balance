@@ -72,7 +72,8 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
     :param xlsx_path: Путь к xlsx-файлу. По умолчанию config.CURRENT_XLSX_PATH.
     :type xlsx_path: Optional[str]
     :returns: Список словарей с полями:
-              top_category, subcategory, brand, name, quantity, price.
+              top_category, subcategory, brand, name, quantity, price,
+              indent (10 или 12), line (имя строки indent 10 — бренд/серия над моделью).
     :rtype: list[dict]
     :raises FileNotFoundError: Если файл не найден.
     :raises openpyxl.utils.exceptions.InvalidFileException: Если файл повреждён.
@@ -97,6 +98,8 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
 
         # Текущий контекст иерархии: {indent: название}
         context: dict[float, str] = {}
+        # Имя последней строки indent 10: в мячах это бренд (Jogel), модели — indent 12.
+        current_line = ""
         items = []
 
         for row_idx, row in enumerate(
@@ -129,7 +132,12 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
                 for child_indent in list(context.keys()):
                     if child_indent > indent:
                         del context[child_indent]
+                if indent <= 8.0:
+                    current_line = ""
                 continue
+
+            if indent == 10.0:
+                current_line = name
 
             # Обрабатываем реальные товарные позиции (indent 10, 12)
             if indent in PRODUCT_INDENTS:
@@ -160,6 +168,8 @@ def parse_stock(xlsx_path: Optional[str] = None) -> list[dict]:
                         "name": name,
                         "quantity": qty,
                         "price": price,
+                        "indent": indent,
+                        "line": current_line or name,
                     }
                 )
 

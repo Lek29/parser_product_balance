@@ -30,11 +30,13 @@ class FilterMode(str, Enum):
     :cvar GLOBAL_FILTER: Стандартное меню (актуализация, общий Excel).
     :cvar PARTIAL_FILTER: Частичная фильтрация (reply-группы, inline-пороги).
     :cvar GROUP_LIMIT_SETUP: Установка постоянных лимитов по группам (алерты).
+    :cvar RED_BIN: Точечный лимит одной позиции (``docs/red_bin.md``).
     """
 
     GLOBAL_FILTER = "global_filter"
     PARTIAL_FILTER = "partial_filter"
     GROUP_LIMIT_SETUP = "group_limit_setup"
+    RED_BIN = "red_bin"
 
 
 # --- Ключи user_data (единая точка, чтобы не опечатываться в хэндлерах) ---
@@ -48,6 +50,15 @@ UD_PARTIAL_PENDING_GROUP_INDEX: str = "partial_pending_group_index"
 UD_GL_GROUPS_ORDER: str = "group_limit_groups_order"
 UD_GL_WIZARD_STEP: str = "group_limit_wizard_step"
 UD_GL_PENDING_GROUP_INDEX: str = "group_limit_pending_group_index"
+
+# --- Red Bin: поиск позиции и ввод своего лимита ---
+UD_RB_STEP: str = "red_bin_step"
+UD_RB_MATCHES: str = "red_bin_matches"
+UD_RB_PENDING_INDEX: str = "red_bin_pending_index"
+UD_RB_TREE: str = "red_bin_tree"
+UD_RB_GROUP: str = "red_bin_group"
+UD_RB_BRAND: str = "red_bin_brand"
+UD_RB_LINE: str = "red_bin_line"
 
 
 class PartialWizardStep(str, Enum):
@@ -80,6 +91,28 @@ class GroupLimitWizardStep(str, Enum):
     GROUPS_LIST = "groups_list"
     LIMIT_FOR_GROUP = "limit_for_group"
     AWAITING_LIMIT_TEXT = "awaiting_limit_text"
+
+
+class RedBinStep(str, Enum):
+    """
+    Шаг мастера Red Bin.
+
+    :cvar IDLE: Мастер не активен.
+    :cvar GROUPS: Показаны группы.
+    :cvar BRANDS: Показан раздел внутри группы (indent 8, часто вид спорта).
+    :cvar LINES: Показаны бренды этого раздела (indent 10: Jogel, Mikasa).
+    :cvar PRODUCTS: Показаны модели выбранного бренда (indent 12).
+    :cvar LIMIT: Выбран товар, показаны пресеты лимита.
+    :cvar AWAITING_LIMIT: Ждём своё число лимита сообщением.
+    """
+
+    IDLE = "idle"
+    GROUPS = "groups"
+    BRANDS = "brands"
+    PRODUCTS = "products"
+    LINES = "lines"
+    LIMIT = "limit"
+    AWAITING_LIMIT = "awaiting_limit"
 
 
 def get_filter_mode(context: Any) -> FilterMode:
@@ -146,6 +179,24 @@ def clear_group_limit_session(context: Any) -> None:
     context.user_data.pop(UD_GL_PENDING_GROUP_INDEX, None)
 
 
+def clear_red_bin_session(context: Any) -> None:
+    """
+    Очищает шаг и выдачу поиска Red Bin.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :returns: None
+    :side effects: Удаляет ключи Red Bin из ``user_data``.
+    """
+    context.user_data.pop(UD_RB_STEP, None)
+    context.user_data.pop(UD_RB_MATCHES, None)
+    context.user_data.pop(UD_RB_PENDING_INDEX, None)
+    context.user_data.pop(UD_RB_TREE, None)
+    context.user_data.pop(UD_RB_GROUP, None)
+    context.user_data.pop(UD_RB_BRAND, None)
+    context.user_data.pop(UD_RB_LINE, None)
+
+
 def reset_session_to_global(context: Any) -> None:
     """
     Сбрасывает сессию в «общий фильтр» и очищает черновики режимов.
@@ -161,6 +212,7 @@ def reset_session_to_global(context: Any) -> None:
     set_filter_mode(context, FilterMode.GLOBAL_FILTER)
     clear_partial_draft(context)
     clear_group_limit_session(context)
+    clear_red_bin_session(context)
 
 
 def init_partial_session(context: Any, groups: list[str]) -> None:
@@ -178,6 +230,7 @@ def init_partial_session(context: Any, groups: list[str]) -> None:
     :side effects: Режим PARTIAL, порядок групп, шаг GROUPS_LIST.
     """
     clear_group_limit_session(context)
+    clear_red_bin_session(context)
     set_filter_mode(context, FilterMode.PARTIAL_FILTER)
     context.user_data[UD_PARTIAL_GROUPS_ORDER] = list(groups)
     context.user_data[UD_PARTIAL_THRESHOLDS] = {}
@@ -199,10 +252,232 @@ def init_group_limit_session(context: Any, groups: list[str]) -> None:
     :side effects: Режим GROUP_LIMIT_SETUP, порядок групп, шаг GROUPS_LIST.
     """
     clear_partial_draft(context)
+    clear_red_bin_session(context)
     set_filter_mode(context, FilterMode.GROUP_LIMIT_SETUP)
     context.user_data[UD_GL_GROUPS_ORDER] = list(groups)
     context.user_data[UD_GL_WIZARD_STEP] = GroupLimitWizardStep.GROUPS_LIST.value
     context.user_data.pop(UD_GL_PENDING_GROUP_INDEX, None)
+
+
+def init_red_bin_session(context: Any) -> None:
+    """
+    Включает режим Red Bin и сбрасывает чужие мастера.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :returns: None
+    :side effects: Режим RED_BIN, шаг GROUPS, каталог ещё не записан.
+    """
+    clear_partial_draft(context)
+    clear_group_limit_session(context)
+    clear_red_bin_session(context)
+    set_filter_mode(context, FilterMode.RED_BIN)
+    context.user_data[UD_RB_STEP] = RedBinStep.GROUPS.value
+
+
+def get_red_bin_step(context: Any) -> RedBinStep:
+    """
+    Шаг мастера Red Bin. Неизвестное значение — ``IDLE``.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :returns: Текущий шаг.
+    :rtype: RedBinStep
+    """
+    raw = context.user_data.get(UD_RB_STEP)
+    if raw is None:
+        return RedBinStep.IDLE
+    try:
+        return RedBinStep(raw)
+    except ValueError:
+        return RedBinStep.IDLE
+
+
+def set_red_bin_step(context: Any, step: RedBinStep) -> None:
+    """
+    Записывает шаг мастера Red Bin.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :param step: Шаг из :class:`RedBinStep`.
+    :type step: RedBinStep
+    :returns: None
+    """
+    context.user_data[UD_RB_STEP] = step.value
+
+
+def get_red_bin_matches(context: Any) -> list[dict]:
+    """
+    Выдача последнего поиска Red Bin.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :returns: Список словарей или пустой список.
+    :rtype: list[dict]
+    """
+    raw = context.user_data.get(UD_RB_MATCHES)
+    if not isinstance(raw, list):
+        return []
+    return list(raw)
+
+
+def set_red_bin_matches(context: Any, matches: list[dict]) -> None:
+    """
+    Сохраняет выдачу поиска, чтобы callback нёс индекс, а не имя.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :param matches: Позиции выбранного бренда из :func:`services.red_bin.browse_tree`.
+    :type matches: list[dict]
+    :returns: None
+    """
+    context.user_data[UD_RB_MATCHES] = list(matches)
+
+
+def set_red_bin_pending_index(context: Any, index: int) -> None:
+    """
+    Индекс строки поиска, для которой ждём свой лимит текстом.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :param index: Индекс в :func:`get_red_bin_matches`.
+    :type index: int
+    :returns: None
+    """
+    context.user_data[UD_RB_PENDING_INDEX] = index
+
+
+def get_red_bin_pending_index(context: Any) -> Optional[int]:
+    """
+    Индекс ожидания своего лимита или ``None``.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :returns: Индекс или ``None``.
+    :rtype: Optional[int]
+    """
+    raw = context.user_data.get(UD_RB_PENDING_INDEX)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def clear_red_bin_pending_index(context: Any) -> None:
+    """
+    Сбрасывает ожидание числа лимита.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :returns: None
+    """
+    context.user_data.pop(UD_RB_PENDING_INDEX, None)
+
+
+def get_red_bin_tree(context: Any) -> dict:
+    """
+    Каталог сессии: группа → бренд → позиции.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :returns: Дерево или пустой словарь.
+    :rtype: dict
+    """
+    raw = context.user_data.get(UD_RB_TREE)
+    return raw if isinstance(raw, dict) else {}
+
+
+def set_red_bin_tree(context: Any, tree: dict) -> None:
+    """
+    Сохраняет каталог, собранный при входе в Red Bin.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :param tree: Результат :func:`services.red_bin.browse_tree`.
+    :type tree: dict
+    :returns: None
+    """
+    context.user_data[UD_RB_TREE] = tree
+
+
+def get_red_bin_group(context: Any) -> Optional[str]:
+    """
+    Имя группы, в которую провалились, или ``None``.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :returns: Имя группы или ``None``.
+    :rtype: Optional[str]
+    """
+    raw = context.user_data.get(UD_RB_GROUP)
+    return raw if isinstance(raw, str) and raw else None
+
+
+def set_red_bin_group(context: Any, name: str) -> None:
+    """
+    Запоминает выбранную группу.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :param name: Ключ верхнего уровня каталога.
+    :type name: str
+    :returns: None
+    """
+    context.user_data[UD_RB_GROUP] = name
+
+
+def get_red_bin_brand(context: Any) -> Optional[str]:
+    """
+    Подпись бренда текущей группы или ``None``.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :returns: Подпись бренда или ``None``.
+    :rtype: Optional[str]
+    """
+    raw = context.user_data.get(UD_RB_BRAND)
+    return raw if isinstance(raw, str) and raw else None
+
+
+def set_red_bin_brand(context: Any, name: str) -> None:
+    """
+    Запоминает выбранный раздел (indent 8).
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :param name: Ключ раздела внутри группы.
+    :type name: str
+    :returns: None
+    """
+    context.user_data[UD_RB_BRAND] = name
+
+
+def get_red_bin_line(context: Any) -> Optional[str]:
+    """
+    Имя бренда indent 10, в который провалились, или ``None``.
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :returns: Имя бренда или ``None``.
+    :rtype: Optional[str]
+    """
+    raw = context.user_data.get(UD_RB_LINE)
+    return raw if isinstance(raw, str) and raw else None
+
+
+def set_red_bin_line(context: Any, name: str) -> None:
+    """
+    Запоминает бренд indent 10 (Jogel, Mikasa).
+
+    :param context: Контекст python-telegram-bot.
+    :type context: Any
+    :param name: Ключ линейки внутри раздела.
+    :type name: str
+    :returns: None
+    """
+    context.user_data[UD_RB_LINE] = name
 
 
 def get_gl_groups_order(context: Any) -> list[str]:

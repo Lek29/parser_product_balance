@@ -159,6 +159,7 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
     :side effects: Обновляет ``data.json`` и ``filtered.xlsx`` в ``storage/``.
                    Лимиты по группам — через
                    :func:`send_group_limit_alerts_for_items` (только при полном парсе).
+                   Red Bin — :func:`services.red_bin.apply_red_bin` на том же полном парсе.
                    Zero-sold push — :func:`services.zero_sold.run_zero_sold_check_after_parse`
                    только при полном парсе (не на cache-hit).
     """
@@ -185,6 +186,10 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
     generate_filtered_xlsx(filtered)
 
     send_group_limit_alerts_for_items(all_items, log_context="after_parse")
+
+    from services.red_bin import apply_red_bin
+
+    apply_red_bin(all_items)
 
     from services.zero_sold import run_zero_sold_check_after_parse
 
