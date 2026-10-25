@@ -232,6 +232,61 @@ def test_check_update_available_same_date_string(
     assert check_update_available(date_str) is False
 
 
+def test_check_update_available_filename_date_beats_email_header(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Дата в имени архива важнее заголовка Date: 23.10 новее 13.04, даже если Date старее."""
+    import config
+
+    meta_path = tmp_path / "meta.json"
+    meta_path.write_text(
+        json.dumps(
+            {
+                "email_date": "Fri, 23 Oct 2026 09:00:13 +0800",
+                "archive_filename": "Остатки от 13.04.2026.zip",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "META_JSON_PATH", str(meta_path))
+
+    from storage.data_store import check_update_available
+
+    assert (
+        check_update_available(
+            "Mon, 13 Apr 2026 09:03:00 +0300",
+            archive_filename="Остатки от 2026-10-23.zip",
+        )
+        is True
+    )
+
+
+def test_status_text_uses_archive_filename_date(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """«Актуально на» берётся из имени файла, не из заголовка Date."""
+    import config
+
+    meta_path = tmp_path / "meta.json"
+    meta_path.write_text(
+        json.dumps(
+            {
+                "archive_filename": "Остатки от 2026-10-23.zip",
+                "email_date": "Mon, 13 Apr 2026 09:03:00 +0300",
+                "updated_at": "2026-10-23T10:10:50",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "META_JSON_PATH", str(meta_path))
+
+    from storage.data_store import get_status_text
+
+    assert get_status_text() == "Актуально на 23.10.2026, загружено 23.10.2026 в 10:10"
+
+
 def test_load_items_corrupt_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

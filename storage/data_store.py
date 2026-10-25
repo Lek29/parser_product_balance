@@ -284,26 +284,46 @@ def get_last_email_date_str() -> Optional[str]:
     return meta.get("email_date")
 
 
-def check_update_available(latest_email_date_str: str) -> bool:
+def check_update_available(latest_email_date_str: str, archive_filename: str = "") -> bool:
     """
-    Сравнивает дату последнего письма с почты с сохранённой в meta.json.
+    Решает, скачивать ли найденный архив остатков вместо файла в meta.json.
 
-    Используется для определения: есть ли новые данные на почте,
-    которые ещё не были скачаны.
+    Сначала сравнивается дата в имени архива (``DD.MM.YYYY`` / ``YYYY-MM-DD``).
+    Заголовок ``Date`` используется, только если дата в имени у обоих файлов
+    совпала или не разобралась. Иначе письмо от 23.10 с датой в имени новее
+    апреля отбрасывается, если заголовок ``Date`` старее сохранённого.
 
     :param latest_email_date_str: Строка даты письма из IMAP (заголовок Date).
     :type latest_email_date_str: str
-    :returns: True если на почте есть более новое письмо, False если данные актуальны.
+    :param archive_filename: Имя вложения, которое бот выбрал на почте.
+    :type archive_filename: str
+    :returns: True, если файл на почте новее сохранённого.
     :rtype: bool
 
     :example:
     >>> check_update_available("Mon, 16 Mar 2026 09:00:00 +0800")
     True
     """
-    saved = get_last_email_date_str()
+    from parser.mail_fetcher import _parse_date_after_stock_prefix
+
+    meta = read_meta_json()
+    saved = None if meta is None else meta.get("email_date")
     if saved is None:
         logger.info("meta.json отсутствует — обновление необходимо.")
         return True
+
+    saved_name = str(meta.get("archive_filename") or "") if meta else ""
+    saved_stock = _parse_date_after_stock_prefix(saved_name) if saved_name else None
+    new_stock = _parse_date_after_stock_prefix(archive_filename) if archive_filename else None
+    if saved_stock is not None and new_stock is not None and saved_stock != new_stock:
+        newer = new_stock > saved_stock
+        logger.info(
+            "Сравнение дат в имени архива: сохранено %s, на почте %s, скачивать=%s",
+            saved_stock.isoformat(),
+            new_stock.isoformat(),
+            newer,
+        )
+        return newer
 
     if saved == latest_email_date_str:
         logger.info("Данные актуальны. Дата письма совпадает: %s", saved)
@@ -907,8 +927,9 @@ def get_status_text() -> str:
     """
     Возвращает читаемую строку со статусом данных для отображения в боте.
 
-    :returns: Строка вида "Актуально на 09.03.2026, обновлено 12.03.2026 в 18:05"
-              или "Данные ещё не загружены" если файлов нет.
+    :returns: Строка вида "Актуально на 09.03.2026, загружено 12.03.2026 в 18:05".
+              «Актуально на» — дата из имени архива, иначе из заголовка ``Date``.
+              «Данные ещё не загружены», если файлов нет.
     :rtype: str
 
     :example:
@@ -926,11 +947,17 @@ def get_status_text() -> str:
     if not email_date_str or not updated_at_str:
         return "Данные ещё не загружены"
 
-    try:
-        email_dt = parsedate_to_datetime(email_date_str)
-        email_formatted = email_dt.strftime("%d.%m.%Y")
-    except Exception:
-        email_formatted = email_date_str
+    from parser.mail_fetcher import _parse_date_after_stock_prefix
+
+    stock_day = _parse_date_after_stock_prefix(str(meta.get("archive_filename") or ""))
+    if stock_day is not None:
+        email_formatted = stock_day.strftime("%d.%m.%Y")
+    else:
+        try:
+            email_dt = parsedate_to_datetime(email_date_str)
+            email_formatted = email_dt.strftime("%d.%m.%Y")
+        except Exception:
+            email_formatted = email_date_str
 
     try:
         updated_dt = datetime.fromisoformat(updated_at_str)

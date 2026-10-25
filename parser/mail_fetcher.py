@@ -13,13 +13,12 @@
 в ``storage/meta.json``.
 
 Если задано положительное :data:`config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS`
-``(N)``, обход писем от новых к старым может **прерваться** без загрузки
-полного тела, когда по заголовку ``Date`` письмо однозначно старше ``N``
-календарных дней (оптимизация; см. ``docs/fix_mail.md``). При ``None`` (в т.ч.
-env ``0`` или отрицательное) окно отключено. Невалидный или пустой ``Date``
-**не** используется для раннего выхода — ``RFC822`` подгружается; дата **строго
-после** «сегодня» тоже не даёт раннего выхода. Актуальность отчёта по смыслу —
-из даты в **имени файла**, не только из этого окна.
+``(N)``, письмо старше ``N`` календарных дней не скачивается целиком
+(см. ``docs/fix_mail.md``). Обход на нём **не останавливается**: номер IMAP
+не совпадает с датой заголовка, и ранний ``break`` прячет более новый архив
+остатков. При ``None`` (в т.ч. env ``0`` или отрицательное) окно отключено.
+Невалидный или пустой ``Date`` не считается старым — ``RFC822`` подгружается.
+Актуальность отчёта — дата в **имени файла**, не заголовок ``Date``.
 """
 
 import email
@@ -432,9 +431,10 @@ def collect_stock_archive_candidates(
 
     Двухфазный обход (HEADER → при multipart RFC822). При
     ``apply_age_window=True`` и заданном :data:`config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS`
-    обход может прерваться на письмах старше окна (см.
-    :func:`_scan_should_stop_before_rfc822`). Для очистки ящика передавайте
-    ``apply_age_window=False``, иначе старые письма не попадут в список.
+    тело письма старше окна не читается (см.
+    :func:`_scan_should_stop_before_rfc822`), но цикл идёт дальше: старый
+    ``Date`` у свежего номера IMAP иначе прячет архив с более новой датой в имени.
+    Для очистки ящика передавайте ``apply_age_window=False``.
 
     :param imap: Авторизованный IMAP объект (папка ещё не выбрана — SELECT внутри).
     :type imap: imaplib.IMAP4_SSL
@@ -486,12 +486,12 @@ def collect_stock_archive_candidates(
             )
         if stop_scan:
             logger.info(
-                "Окно по дате письма (%s дн.): письмо id=%s старше окна (Date=%s), обход остановлен.",
+                "Окно по дате письма (%s дн.): письмо id=%s старше окна (Date=%s), тело пропущено.",
                 max_msg_age,
                 msg_id.decode("ascii", errors="replace"),
                 date_str,
             )
-            break
+            continue
 
         _, msg_data = imap.fetch(msg_id, "(RFC822)")
         msg_bytes = _imap_fetch_payload(msg_data)
@@ -805,7 +805,7 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
         # check_update_available сравнивает datetime с учётом timezone — защита от
         # ситуации когда одно письмо возвращается сервером с разными TZ-смещениями
         # (например, "+0000" vs "+0800" для того же момента времени).
-        if not force and not check_update_available(email_date):
+        if not force and not check_update_available(email_date, archive_filename=archive_filename):
             # Данные актуальны — фиксируем дату проверки
             set_last_check_date(today)
             return MailFetchOutcome.NO_CHANGES
