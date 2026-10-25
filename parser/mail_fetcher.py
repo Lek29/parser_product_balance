@@ -552,6 +552,7 @@ def collect_stock_archive_candidates(
 
 def _find_latest_archive_attachment(
     imap: imaplib.IMAP4_SSL,
+    force: bool = False,
 ) -> Tuple[Optional[email.message.Message], Optional[str], Optional[str]]:
     """
     Ищет в настроенной IMAP-папке (:data:`config.EMAIL_IMAP_FOLDER`) одно вложение —
@@ -577,12 +578,14 @@ def _find_latest_archive_attachment(
 
     :param imap: Авторизованный IMAP объект.
     :type imap: imaplib.IMAP4_SSL
+    :param force: Принудительный обход без окна по дате письма.
+    :type force: bool
     :returns: Кортеж (сообщение, имя архива, заголовок Date выбранного письма).
               Все ``None``, если подходящих вложений нет (результат для
               :func:`fetch_and_save` — ``NO_CHANGES``, без подмены чужим архивом).
     :rtype: Tuple[Optional[email.message.Message], Optional[str], Optional[str]]
     """
-    candidates = collect_stock_archive_candidates(imap, apply_age_window=True)
+    candidates = collect_stock_archive_candidates(imap, apply_age_window=not force)
 
     if not candidates:
         logger.warning(
@@ -792,7 +795,7 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
     try:
         imap = _connect_imap()
 
-        msg, archive_filename, email_date = _find_latest_archive_attachment(imap)
+        msg, archive_filename, email_date = _find_latest_archive_attachment(imap, force=force)
 
         # Кортеж всегда согласован: либо все None, либо все заданы.
         if msg is None or archive_filename is None or email_date is None:
