@@ -89,9 +89,16 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            # 3. Скачиваем готовый образ с серверов GitHub
-            docker compose pull
-
-            # 4. Тег latest не меняет хэш compose-файла — без --force-recreate
-            #    контейнер остаётся на старом образе, а job всё равно зелёный.
-            docker compose up -d --force-recreate
+            # 3–4. containerd иногда рвёт сокет на pull (lease/closed connection).
+            #      Три попытки. --force-recreate, потому что тег latest не меняет compose.
+            ok=0
+            for _ in 1 2 3; do
+              if docker compose pull && docker compose up -d --force-recreate --remove-orphans; then
+                ok=1
+                break
+              fi
+              sleep 8
+            done
+            test "$ok" = 1
+            # Остановленные контейнеры этого compose. Работающий бот не трогает.
+            docker compose rm -f
