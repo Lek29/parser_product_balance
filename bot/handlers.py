@@ -582,11 +582,13 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         from parser.mail_fetcher import MailFetchOutcome, fetch_and_save
 
-        outcome = fetch_and_save()
+        # Кнопка всегда принудительно качает лучшее найденное письмо (force=True),
+        # игнорируя кэш текущей недели и проверку "письмо не новее сохранённого".
+        outcome = fetch_and_save(force=True)
 
         from services.stock_pipeline import run_parse_and_save_filtered
 
-        # SKIPPED_TODAY — уже скачивали на этой календарной неделе МСК (updated_at)
+        # SKIPPED_TODAY с force=True не вернётся, но оставляем на всякий случай
         if outcome == MailFetchOutcome.SKIPPED_TODAY:
             await query.edit_message_text("⏳ Файл этой недели уже есть — сверяю кэш таблицы...")
             all_count, filtered_count = run_parse_and_save_filtered()
@@ -601,9 +603,9 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
 
-        # NO_CHANGES — IMAP проверен, нового письма нет
+        # NO_CHANGES с force=True означает только одно: писем с архивами в ящике вообще нет
         if outcome == MailFetchOutcome.NO_CHANGES:
-            await query.edit_message_text("⏳ Новых писем нет — сверяю локальный кэш таблицы...")
+            await query.edit_message_text("⏳ Подходящих архивов на почте не найдено — сверяю локальный кэш таблицы...")
             all_count, filtered_count = run_parse_and_save_filtered()
             reset_session_to_global(context)
             status = get_status_text()
