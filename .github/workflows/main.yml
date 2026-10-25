@@ -77,16 +77,19 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           envs: GITHUB_TOKEN,USERNAME
+          script_stop: true
           script: |
+            set -o pipefail
             # 1. Авторизуем сервер для скачивания приватного образа
             echo $GITHUB_TOKEN | docker login ghcr.io -u $USERNAME --password-stdin
-            
+
             # 2. Переходим в папку проекта и подтягиваем новый docker-compose.yml
             cd /opt/projects/fanat_product_balance
             git pull origin main
-            
+
             # 3. Скачиваем готовый образ с серверов GitHub
             docker compose pull
-            
-            # 4. Перезапускаем контейнер из нового образа
-            docker compose up -d
+
+            # 4. Тег latest не меняет хэш compose-файла — без --force-recreate
+            #    контейнер остаётся на старом образе, а job всё равно зелёный.
+            docker compose up -d --force-recreate
