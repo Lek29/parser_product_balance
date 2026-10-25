@@ -83,9 +83,11 @@ jobs:
             # 1. Авторизуем сервер для скачивания приватного образа
             echo $GITHUB_TOKEN | docker login ghcr.io -u $USERNAME --password-stdin
 
-            # 2. Переходим в папку проекта и подтягиваем новый docker-compose.yml
+            # 2. Код бота в образе. Каталог на VPS только для compose.
+            #    pull падает, если compose правили руками; reset не трогает .env и storage.
             cd /opt/projects/fanat_product_balance
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
 
             # 3. Скачиваем готовый образ с серверов GitHub
             docker compose pull
