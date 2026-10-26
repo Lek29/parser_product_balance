@@ -284,7 +284,7 @@ def test_status_text_uses_archive_filename_date(
 
     from storage.data_store import get_status_text
 
-    assert get_status_text() == "Актуально на 23.10.2026, загружено 23.10.2026 в 10:10"
+    assert "Актуально на 23.10.2026, загружено 23.10.2026 в 10:10" in get_status_text()
 
 
 def test_load_items_corrupt_json(

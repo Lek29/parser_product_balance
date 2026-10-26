@@ -965,4 +965,6 @@ def get_status_text() -> str:
     except Exception:
         updated_formatted = updated_at_str
 
-    return f"Актуально на {email_formatted}, загружено {updated_formatted}"
+    import config
+
+    return f"Актуально на {email_formatted}, загружено {updated_formatted} ({config.APP_VERSION})"

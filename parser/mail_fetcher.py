@@ -486,12 +486,12 @@ def collect_stock_archive_candidates(
             )
         if stop_scan:
             logger.info(
-                "Окно по дате письма (%s дн.): письмо id=%s старше окна (Date=%s), тело пропущено.",
+                "Окно по дате письма (%s дн.): письмо id=%s старше окна (Date=%s), обход остановлен.",
                 max_msg_age,
                 msg_id.decode("ascii", errors="replace"),
                 date_str,
             )
-            continue
+            break
 
         _, msg_data = imap.fetch(msg_id, "(RFC822)")
         msg_bytes = _imap_fetch_payload(msg_data)
@@ -552,7 +552,6 @@ def collect_stock_archive_candidates(
 
 def _find_latest_archive_attachment(
     imap: imaplib.IMAP4_SSL,
-    force: bool = False,
 ) -> Tuple[Optional[email.message.Message], Optional[str], Optional[str]]:
     """
     Ищет в настроенной IMAP-папке (:data:`config.EMAIL_IMAP_FOLDER`) одно вложение —
@@ -578,14 +577,12 @@ def _find_latest_archive_attachment(
 
     :param imap: Авторизованный IMAP объект.
     :type imap: imaplib.IMAP4_SSL
-    :param force: Принудительный обход без окна по дате письма.
-    :type force: bool
     :returns: Кортеж (сообщение, имя архива, заголовок Date выбранного письма).
               Все ``None``, если подходящих вложений нет (результат для
               :func:`fetch_and_save` — ``NO_CHANGES``, без подмены чужим архивом).
     :rtype: Tuple[Optional[email.message.Message], Optional[str], Optional[str]]
     """
-    candidates = collect_stock_archive_candidates(imap, apply_age_window=not force)
+    candidates = collect_stock_archive_candidates(imap, apply_age_window=True)
 
     if not candidates:
         logger.warning(
@@ -795,7 +792,7 @@ def fetch_and_save(force: bool = False) -> MailFetchOutcome:
     try:
         imap = _connect_imap()
 
-        msg, archive_filename, email_date = _find_latest_archive_attachment(imap, force=force)
+        msg, archive_filename, email_date = _find_latest_archive_attachment(imap)
 
         # Кортеж всегда согласован: либо все None, либо все заданы.
         if msg is None or archive_filename is None or email_date is None:

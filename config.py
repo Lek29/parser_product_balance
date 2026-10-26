@@ -29,6 +29,9 @@ def _require(key: str) -> str:
     return value
 
 
+# Версия приложения. Меняется при каждом деплое для отслеживания (отображается в боте).
+APP_VERSION = "v1.0.1"
+
 # --- Почта ---
 EMAIL_ADDRESS: str = _require("EMAIL_ADDRESS")
 EMAIL_PASSWORD: str = _require("EMAIL_PASSWORD")
