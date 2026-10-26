@@ -139,7 +139,7 @@ def send_group_limit_alerts_for_items(
         )
 
 
-def run_parse_and_save_filtered() -> tuple[int, int]:
+def run_parse_and_save_filtered(*, notify_group_limits: bool = True) -> tuple[int, int]:
     """
     Парсит ``storage/current.xlsx``, пишет ``data.json`` и глобальный ``filtered.xlsx``.
 
@@ -154,11 +154,16 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
     фильтрация и запись ``filtered.xlsx``, чтобы при сбое генерации Excel
     в ``data.json`` уже лежал актуальный полный список (удобно для отладки).
 
+    :param notify_group_limits: Слать сводку лимитов групп в служебный чат.
+        Кнопка актуализации передаёт ``False``.
+    :type notify_group_limits: bool
     :returns: Кортеж ``(число всех позиций, число позиций с малым остатком)``.
     :rtype: tuple[int, int]
     :side effects: Обновляет ``data.json`` и ``filtered.xlsx`` в ``storage/``.
                    Лимиты по группам — через
-                   :func:`send_group_limit_alerts_for_items` (только при полном парсе).
+                   :func:`send_group_limit_alerts_for_items` (полный парс и
+                   ``notify_group_limits=True``). Кнопка «Актуализировать» ставит
+                   ``False``: сводка позиций не ответ на кнопку.
                    Red Bin — :func:`services.red_bin.apply_red_bin` на том же полном парсе.
                    Zero-sold push — :func:`services.zero_sold.run_zero_sold_check_after_parse`
                    только при полном парсе (не на cache-hit).
@@ -185,7 +190,8 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
     filtered = filter_by_threshold(all_items)
     generate_filtered_xlsx(filtered)
 
-    send_group_limit_alerts_for_items(all_items, log_context="after_parse")
+    if notify_group_limits:
+        send_group_limit_alerts_for_items(all_items, log_context="after_parse")
 
     from services.red_bin import apply_red_bin
 

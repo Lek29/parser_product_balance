@@ -591,7 +591,7 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # SKIPPED_TODAY с force=True не вернётся, но оставляем на всякий случай
         if outcome == MailFetchOutcome.SKIPPED_TODAY:
             await query.edit_message_text("⏳ Файл этой недели уже есть — сверяю кэш таблицы...")
-            all_count, filtered_count = run_parse_and_save_filtered()
+            all_count, filtered_count = run_parse_and_save_filtered(notify_group_limits=False)
             reset_session_to_global(context)
             status = get_status_text()
             await query.edit_message_text(
@@ -606,7 +606,7 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # NO_CHANGES с force=True означает только одно: писем с архивами в ящике вообще нет
         if outcome == MailFetchOutcome.NO_CHANGES:
             await query.edit_message_text("⏳ Подходящих архивов на почте не найдено — сверяю локальный кэш таблицы...")
-            all_count, filtered_count = run_parse_and_save_filtered()
+            all_count, filtered_count = run_parse_and_save_filtered(notify_group_limits=False)
             reset_session_to_global(context)
             status = get_status_text()
             await query.edit_message_text(
@@ -630,7 +630,7 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         await query.edit_message_text("⏳ Обрабатываю таблицу...")
 
-        all_count, filtered_count = run_parse_and_save_filtered()
+        all_count, filtered_count = run_parse_and_save_filtered(notify_group_limits=False)
 
         reset_session_to_global(context)
 

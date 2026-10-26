@@ -576,6 +576,9 @@ def test_run_parse_pipeline_single_telegram_send_for_multiple_groups(
     assert filt_n == 0
     assert len(sends) == 1
     assert "Альфа" in sends[0] and "Бета" in sends[0]
+    sends.clear()
+    run_parse_and_save_filtered(notify_group_limits=False)
+    assert sends == []
 
 
 def test_run_parse_pipeline_no_alert_when_no_limits(

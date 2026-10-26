@@ -44,6 +44,60 @@ def register_polling_bridge(app: Application) -> None:
     )
 
 
+def _log_task_error(task: asyncio.Task) -> None:
+    """
+    Пишет в лог исключение корутины, поставленной через ``create_task``.
+
+    :param task: Завершившаяся задача отправки.
+    :type task: asyncio.Task
+    :returns: None
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Telegram bridge: ошибка отправки: %s", exc, exc_info=exc)
+
+
+def _dispatch(coro, timeout: float) -> bool:
+    """
+    Ставит корутину в цикл polling.
+
+    Вызов с самого этого цикла нельзя ждать через ``fut.result``: цикл
+    заблокирован и отправка не начнётся, пока не выйдет таймаут.
+
+    :param coro: Корутина отправки.
+    :param timeout: Сколько ждать, если вызов из другого потока.
+    :type timeout: float
+    :returns: ``True``, если отправка поставлена или завершилась без ошибки.
+    :rtype: bool
+    """
+    loop = _loop
+    if loop is None:
+        logger.error("Telegram bridge: event loop не зарегистрирован.")
+        return False
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is loop:
+        task = loop.create_task(coro)
+        task.add_done_callback(_log_task_error)
+        return True
+
+    fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    try:
+        fut.result(timeout=timeout)
+    except Exception as e:
+        logger.error(
+            "Telegram bridge: ошибка отправки: %s",
+            e,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 def send_group_limit_alert_html(html: str) -> None:
     """
     Отправляет HTML-алерт о лимитах групп в ``STOCK_LIMIT_ALERT_CHAT_ID``.
@@ -86,16 +140,7 @@ def send_group_limit_alert_html(html: str) -> None:
             disable_web_page_preview=True,
         )
 
-    fut = asyncio.run_coroutine_threadsafe(_send(), _loop)
-    try:
-        fut.result(timeout=90)
-    except Exception as e:
-        logger.error(
-            "Telegram bridge: ошибка отправки алерта в chat_id=%s: %s",
-            chat_id,
-            e,
-            exc_info=True,
-        )
+    if not _dispatch(_send(), 90):
         return
 
     logger.info(
@@ -149,16 +194,7 @@ def send_zero_sold_xlsx(
                 read_timeout=60,
             )
 
-    fut = asyncio.run_coroutine_threadsafe(_send(), _loop)
-    try:
-        fut.result(timeout=120)
-    except Exception as e:
-        logger.error(
-            "Telegram bridge: ошибка send_document zero-sold в chat_id=%s: %s",
-            chat_id,
-            e,
-            exc_info=True,
-        )
+    if not _dispatch(_send(), 120):
         return False
 
     logger.info(
