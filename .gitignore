@@ -29,6 +29,7 @@ storage/red_bin.json
 
 # Скрипты разработки
 test.py
+scripts/red_bin_stand.py
 
 # IDE / служебные
 /docs
