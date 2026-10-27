@@ -111,6 +111,13 @@ def test_parse_date_iso_and_ddmm(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _parse_date_after_stock_prefix("Остатки от 2026-03-31.zip") == date(2026, 3, 31)
 
 
+def test_imap_since_date_is_english_and_arrival_window() -> None:
+    """SINCE считает от прибытия: 27.10 минус 7 дней = 20-Oct-2026, месяц не локализуется."""
+    from parser.mail_fetcher import _imap_since_date
+
+    assert _imap_since_date(date(2026, 10, 27), 7) == "20-Oct-2026"
+
+
 def test_effective_stock_date_rejects_bad_without_date(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

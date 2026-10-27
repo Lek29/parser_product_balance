@@ -13,12 +13,11 @@
 в ``storage/meta.json``.
 
 Если задано положительное :data:`config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS`
-``(N)``, письмо старше ``N`` календарных дней не скачивается целиком
-(см. ``docs/fix_mail.md``). Обход на нём **не останавливается**: номер IMAP
-не совпадает с датой заголовка, и ранний ``break`` прячет более новый архив
-остатков. При ``None`` (в т.ч. env ``0`` или отрицательное) окно отключено.
-Невалидный или пустой ``Date`` не считается старым — ``RFC822`` подгружается.
-Актуальность отчёта — дата в **имени файла**, не заголовок ``Date``.
+``(N)``, IMAP-поиск ``SINCE`` берёт письма, **прибывшие** на сервер за последние
+``N`` дней. Заголовок ``Date`` для этого окна не используется: у отчёта он
+бывает старым, и обрыв обхода по нему прячет архив с новой датой в имени.
+При ``None`` (env ``0`` или отрицательное) окно отключено, читается вся папка.
+Актуальность отчёта — дата в **имени файла**.
 """
 
 import email
@@ -30,7 +29,7 @@ import re
 import shutil
 import zipfile
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from enum import Enum
@@ -162,40 +161,23 @@ def _parse_email_date_for_sort(date_header: str) -> datetime:
         return datetime.min.replace(tzinfo=None)
 
 
-_MIN_NAIVE_DATETIME = datetime.min.replace(tzinfo=None)
-
-
-def _scan_should_stop_before_rfc822(
-    date_header: str,
-    max_age_days: Optional[int],
-    today: date,
-) -> Tuple[bool, bool]:
+def _imap_since_date(today: date, max_age_days: int) -> str:
     """
-    Окно по возрасту письма по заголовку ``Date`` (только оптимизация обхода IMAP).
+    Аргумент IMAP ``SINCE``: нижняя граница даты прибытия письма на сервер.
 
-    Бизнес-дата остатков по-прежнему из имени файла; см. ``docs/fix_mail.md`` §4.
-    При ``max_age_days is None`` окно выключено.
+    Месяц всегда английский. ``strftime("%b")`` на русской локали даёт «окт»
+    и поиск возвращает пусто.
 
-    :param date_header: Сырая строка заголовка ``Date`` из ``BODY.PEEK[HEADER]``.
-    :param max_age_days: Положительное ``N`` или ``None`` (без ограничения).
-    :param today: Календарная дата для сравнения (обычно ``date.today()``).
-    :returns: Пара ``(stop_scan, date_unparsed)``. ``stop_scan`` — прервать цикл,
-        не вызывая ``fetch(RFC822)`` для этого и последующих писем (письмо однозначно
-        старше окна). ``date_unparsed`` — заголовок не разобран (как ``datetime.min``):
-        ранний выход **не** применять; вызывающий подгружает ``RFC822`` и пишет warning.
+    :param today: День, от которого отсчитывается окно.
+    :type today: date
+    :param max_age_days: Сколько календарных дней назад включительно.
+    :type max_age_days: int
+    :returns: Строка вида ``20-Oct-2026``.
+    :rtype: str
     """
-    if max_age_days is None:
-        return False, False
-    dt = _parse_email_date_for_sort(date_header)
-    if dt == _MIN_NAIVE_DATETIME:
-        return False, True
-    d = dt.date()
-    # Дата в будущем: не считаем письмо «старше окна» (ошибка TZ/сервера).
-    if d > today:
-        return False, False
-    if (today - d).days > max_age_days:
-        return True, False
-    return False, False
+    start = today - timedelta(days=max_age_days)
+    months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    return f"{start.day:02d}-{months[start.month - 1]}-{start.year}"
 
 
 def _msg_id_numeric(msg_id: bytes) -> int:
@@ -431,9 +413,8 @@ def collect_stock_archive_candidates(
 
     Двухфазный обход (HEADER → при multipart RFC822). При
     ``apply_age_window=True`` и заданном :data:`config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS`
-    тело письма старше окна не читается (см.
-    :func:`_scan_should_stop_before_rfc822`), но цикл идёт дальше: старый
-    ``Date`` у свежего номера IMAP иначе прячет архив с более новой датой в имени.
+    в поиск попадают только письма, прибывшие на сервер за это окно
+    (IMAP ``SINCE``). Заголовок ``Date`` окно не режет.
     Для очистки ящика передавайте ``apply_age_window=False``.
 
     :param imap: Авторизованный IMAP объект (папка ещё не выбрана — SELECT внутри).
@@ -445,7 +426,14 @@ def collect_stock_archive_candidates(
     """
     _select_mail_folder(imap)
     folder = config.EMAIL_IMAP_FOLDER
-    _, msg_ids_raw = imap.search(None, "ALL")
+    today = date.today()
+    max_msg_age = config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS if apply_age_window else None
+    if max_msg_age is not None:
+        since = _imap_since_date(today, max_msg_age)
+        logger.info("IMAP поиск SINCE %s, окно %s дн. (дата прибытия).", since, max_msg_age)
+        _, msg_ids_raw = imap.search(None, "SINCE", since)
+    else:
+        _, msg_ids_raw = imap.search(None, "ALL")
     msg_ids = msg_ids_raw[0].split() if msg_ids_raw and msg_ids_raw[0] else []
 
     if not msg_ids:
@@ -460,8 +448,6 @@ def collect_stock_archive_candidates(
     )
 
     candidates: List[_StockArchiveCandidate] = []
-    today = date.today()
-    max_msg_age = config.MAIL_IMAP_MAX_MESSAGE_AGE_DAYS if apply_age_window else None
 
     for msg_id in reversed(msg_ids):
         _, header_data = imap.fetch(msg_id, "(BODY.PEEK[HEADER])")
@@ -476,22 +462,6 @@ def collect_stock_archive_candidates(
             continue
 
         date_str = headers.get("Date", "")
-        stop_scan, date_unparsed = _scan_should_stop_before_rfc822(date_str, max_msg_age, today)
-        if date_unparsed and max_msg_age is not None:
-            logger.warning(
-                "Заголовок Date не разобран, ранний выход по окну (%s дн.) не "
-                "применяется; подгружаем RFC822 (письмо id=%s).",
-                max_msg_age,
-                msg_id.decode("ascii", errors="replace"),
-            )
-        if stop_scan:
-            logger.info(
-                "Окно по дате письма (%s дн.): письмо id=%s старше окна (Date=%s), обход остановлен.",
-                max_msg_age,
-                msg_id.decode("ascii", errors="replace"),
-                date_str,
-            )
-            break
 
         _, msg_data = imap.fetch(msg_id, "(RFC822)")
         msg_bytes = _imap_fetch_payload(msg_data)
