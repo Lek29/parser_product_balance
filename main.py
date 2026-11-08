@@ -117,7 +117,6 @@ def main() -> None:
             allowed_updates=Update.ALL_TYPES,
             drop_pending_updates=True,
             bootstrap_retries=-1,
-            stop_signals=None,
         )
     finally:
         scheduler.shutdown()
