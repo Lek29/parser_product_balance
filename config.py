@@ -30,7 +30,7 @@ def _require(key: str) -> str:
 
 
 # Версия приложения. Меняется при каждом деплое для отслеживания (отображается в боте).
-APP_VERSION = "v1.0.2"
+APP_VERSION = "v1.0.3"
 
 # --- Почта ---
 EMAIL_ADDRESS: str = _require("EMAIL_ADDRESS")
@@ -118,10 +118,48 @@ def _optional_int_env(key: str) -> Optional[int]:
         raise EnvironmentError(f"Переменная {key} должна быть целым числом или пустой, получено: {raw!r}") from e
 
 
-# Уведомления о порогах по группе (docs/fourty_role.md).
-# Не задано — отправка алертов пропускается.
-# Личка: пороги по группам + xlsx «ушли в ноль» + Red Bin (docs/red_bin.md).
-STOCK_LIMIT_ALERT_CHAT_ID: Optional[int] = _optional_int_env("STOCK_LIMIT_ALERT_CHAT_ID")
+def _parse_int_list_env(*keys: str) -> tuple[int, ...]:
+    """
+    Читает один или несколько целочисленных chat_id из переменных окружения
+    (разделители: запятая, точка с запятой, пробел).
+
+    :param keys: Имена переменных окружения по приоритету/объединению.
+    :type keys: str
+    :returns: Кортеж уникальных chat_id в порядке указания.
+    :rtype: tuple[int, ...]
+    :raises EnvironmentError: Если токен не является целым числом.
+    """
+    seen: set[int] = set()
+    out: list[int] = []
+    for key in keys:
+        raw = os.getenv(key)
+        if raw is None:
+            continue
+        normalized = str(raw).replace(";", ",").replace(" ", ",")
+        for part in normalized.split(","):
+            token = part.strip()
+            if not token:
+                continue
+            try:
+                cid = int(token, 10)
+            except ValueError as e:
+                raise EnvironmentError(
+                    f"Переменная {key} должна содержать целые числа (chat_id), получено: {raw!r}"
+                ) from e
+            if cid not in seen:
+                seen.add(cid)
+                out.append(cid)
+    return tuple(out)
+
+
+# Уведомления о порогах по группе, xlsx «ушли в ноль» и Red Bin (docs/red_bin.md).
+# Отправляются всем chat_id, указанным в .env (STOCK_LIMIT_ALERT_CHAT_ID / STOCK_LIMIT_ALERT_CHAT_IDS),
+# независимо от списка паролей в storage/auth.json.
+STOCK_LIMIT_ALERT_CHAT_IDS: tuple[int, ...] = _parse_int_list_env(
+    "STOCK_LIMIT_ALERT_CHAT_ID",
+    "STOCK_LIMIT_ALERT_CHAT_IDS",
+)
+STOCK_LIMIT_ALERT_CHAT_ID: Optional[int] = STOCK_LIMIT_ALERT_CHAT_IDS[0] if STOCK_LIMIT_ALERT_CHAT_IDS else None
 
 # --- Параметры фильтрации ---
 STOCK_THRESHOLD: int = int(os.getenv("STOCK_THRESHOLD", "5"))

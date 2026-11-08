@@ -26,6 +26,7 @@ from services.stock_pipeline import (
 from storage.data_store import (
     get_last_check_date,
     list_all_limits,
+    list_red_bin,
     read_meta_json,
 )
 
@@ -145,8 +146,11 @@ def run_weekly_group_limit_revision() -> None:
     :rtype: None
     """
     try:
+        from services.red_bin import apply_red_bin
+
         limits = list_all_limits()
-        if not limits:
+        red_bin_items = list_red_bin()
+        if not limits and not red_bin_items:
             logger.info(
                 "Ревизия порогов по группам: нет лимитов — задача пропущена.",
             )
@@ -160,10 +164,13 @@ def run_weekly_group_limit_revision() -> None:
                 len(limits),
             )
             items = parse_stock(config.CURRENT_XLSX_PATH)
-            send_group_limit_alerts_for_items(
-                items,
-                log_context="weekly_revision",
-            )
+            if limits:
+                send_group_limit_alerts_for_items(
+                    items,
+                    log_context="weekly_revision",
+                )
+            if red_bin_items:
+                apply_red_bin(items)
             return
 
         source = "fetched_from_mail"
@@ -200,10 +207,13 @@ def run_weekly_group_limit_revision() -> None:
             )
             return
 
-        send_group_limit_alerts_for_items(
-            items,
-            log_context="weekly_revision",
-        )
+        if limits:
+            send_group_limit_alerts_for_items(
+                items,
+                log_context="weekly_revision",
+            )
+        if red_bin_items:
+            apply_red_bin(items)
 
     except Exception:
         logger.error(

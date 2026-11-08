@@ -182,6 +182,9 @@ def run_parse_and_save_filtered(*, notify_group_limits: bool = True) -> tuple[in
                 "Кэш парсинга: data.json совпал с current.xlsx; parse_stock пропущен (%d поз.).",
                 len(all_items),
             )
+        from services.red_bin import apply_red_bin
+
+        apply_red_bin(all_items)
         return len(all_items), len(filtered)
 
     fp = current_xlsx_fingerprint()

@@ -98,16 +98,48 @@ def _dispatch(coro, timeout: float) -> bool:
     return True
 
 
+def _resolve_alert_chat_ids() -> list[int]:
+    """
+    Возвращает список целевых chat_id из конфигурации (.env).
+
+    Учитывает ``config.STOCK_LIMIT_ALERT_CHAT_IDS`` и ``config.STOCK_LIMIT_ALERT_CHAT_ID``
+    (на случай подмены одной из констант в тестах через monkeypatch).
+    Не зависит от ``storage/auth.json``.
+
+    :returns: Уникальные целочисленные chat_id получателей алертов.
+    :rtype: list[int]
+    """
+    single = getattr(config, "STOCK_LIMIT_ALERT_CHAT_ID", None)
+    many = getattr(config, "STOCK_LIMIT_ALERT_CHAT_IDS", ()) or ()
+    if single is None and not many:
+        return []
+    seen: set[int] = set()
+    result: list[int] = []
+    if single is not None:
+        cid = int(single)
+        seen.add(cid)
+        result.append(cid)
+    for item in many:
+        if item is None:
+            continue
+        cid = int(item)
+        if cid not in seen:
+            seen.add(cid)
+            result.append(cid)
+    return result
+
+
 def send_group_limit_alert_html(html: str) -> None:
     """
-    Отправляет HTML-алерт о лимитах групп в ``STOCK_LIMIT_ALERT_CHAT_ID``.
+    Отправляет HTML-алерт о лимитах групп / Red Bin всем chat_id из ``.env``.
 
-    Безопасна при отсутствии чата в конфиге или до старта polling: пишет
+    Безопасна при отсутствии чатов в конфиге или до старта polling: пишет
     предупреждение в лог и выходит. Ошибки Telegram API логируются с
     ``exc_info``, исключение наружу не пробрасывает.
 
     :param html: Текст из
-                 :func:`services.group_limit_alert_text.format_group_limit_alerts_html`.
+                 :func:`services.group_limit_alert_text.format_group_limit_alerts_html`
+                 или :func:`services.red_bin.format_red_bin_alert_html`.
     :type html: str
     :returns: None
     :side effects: HTTP-запрос к Bot API в цикле polling.
@@ -115,8 +147,8 @@ def send_group_limit_alert_html(html: str) -> None:
     if not html:
         return
 
-    chat_id = config.STOCK_LIMIT_ALERT_CHAT_ID
-    if chat_id is None:
+    chat_ids = _resolve_alert_chat_ids()
+    if not chat_ids:
         logger.warning(
             "Telegram bridge: STOCK_LIMIT_ALERT_CHAT_ID не задан — алерт лимитов не отправлен (%d симв. текста).",
             len(html),
@@ -126,28 +158,30 @@ def send_group_limit_alert_html(html: str) -> None:
     if _bot is None or _loop is None:
         logger.warning(
             "Telegram bridge: bot/loop не зарегистрированы (polling ещё не "
-            "готов?) — алерт не отправлен (chat_id=%s, %d симв.).",
-            chat_id,
+            "готов?) — алерт не отправлен (chat_ids=%s, %d симв.).",
+            chat_ids,
             len(html),
         )
         return
 
-    async def _send() -> None:
-        await _bot.send_message(
-            chat_id=chat_id,
-            text=html,
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True,
+    for chat_id in chat_ids:
+
+        async def _send(target_chat_id: int = chat_id) -> None:
+            await _bot.send_message(
+                chat_id=target_chat_id,
+                text=html,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+            )
+
+        if not _dispatch(_send(), 90):
+            continue
+
+        logger.info(
+            "Telegram bridge: алерт лимитов отправлен в chat_id=%s (%d симв.).",
+            chat_id,
+            len(html),
         )
-
-    if not _dispatch(_send(), 90):
-        return
-
-    logger.info(
-        "Telegram bridge: алерт лимитов отправлен в chat_id=%s (%d симв.).",
-        chat_id,
-        len(html),
-    )
 
 
 def send_zero_sold_xlsx(
@@ -157,7 +191,7 @@ def send_zero_sold_xlsx(
     filename: str,
 ) -> bool:
     """
-    Отправляет xlsx «ушли в ноль» в личку (``STOCK_LIMIT_ALERT_CHAT_ID``).
+    Отправляет xlsx «ушли в ноль» всем chat_id из ``.env`` (``STOCK_LIMIT_ALERT_CHAT_ID``).
 
     :param path: Локальный путь к файлу ``.xlsx``.
     :type path: str
@@ -165,12 +199,12 @@ def send_zero_sold_xlsx(
     :type caption: str
     :param filename: Имя файла, видимое в Telegram (с датой).
     :type filename: str
-    :returns: ``True``, если отправка завершилась без исключения.
+    :returns: ``True``, если хотя бы одна отправка завершилась без исключения.
     :rtype: bool
     :side effects: HTTP ``sendDocument`` в цикле polling.
     """
-    chat_id = config.STOCK_LIMIT_ALERT_CHAT_ID
-    if chat_id is None:
+    chat_ids = _resolve_alert_chat_ids()
+    if not chat_ids:
         logger.warning(
             "Telegram bridge: STOCK_LIMIT_ALERT_CHAT_ID не задан — zero-sold xlsx не отправлен.",
         )
@@ -178,28 +212,31 @@ def send_zero_sold_xlsx(
 
     if _bot is None or _loop is None:
         logger.warning(
-            "Telegram bridge: bot/loop не зарегистрированы — zero-sold xlsx не отправлен (chat_id=%s).",
-            chat_id,
+            "Telegram bridge: bot/loop не зарегистрированы — zero-sold xlsx не отправлен (chat_ids=%s).",
+            chat_ids,
         )
         return False
 
-    async def _send() -> None:
-        with open(path, "rb") as f:
-            await _bot.send_document(
-                chat_id=chat_id,
-                document=f,
-                filename=filename,
-                caption=caption,
-                write_timeout=120,
-                read_timeout=60,
+    any_sent = False
+    for chat_id in chat_ids:
+
+        async def _send(target_chat_id: int = chat_id) -> None:
+            with open(path, "rb") as f:
+                await _bot.send_document(
+                    chat_id=target_chat_id,
+                    document=f,
+                    filename=filename,
+                    caption=caption,
+                    write_timeout=120,
+                    read_timeout=60,
+                )
+
+        if _dispatch(_send(), 120):
+            any_sent = True
+            logger.info(
+                "Telegram bridge: zero-sold xlsx отправлен в chat_id=%s file=%s",
+                chat_id,
+                filename,
             )
 
-    if not _dispatch(_send(), 120):
-        return False
-
-    logger.info(
-        "Telegram bridge: zero-sold xlsx отправлен в chat_id=%s file=%s",
-        chat_id,
-        filename,
-    )
-    return True
+    return any_sent

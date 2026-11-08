@@ -189,3 +189,50 @@ def test_apply_red_bin_one_message_and_silent_baseline(monkeypatch, tmp_path) ->
     sent.clear()
     apply_red_bin([_ball(5), quiet])
     assert sent == []
+
+
+def test_red_bin_sends_to_env_chat_ids_on_below_five_and_zero(monkeypatch, tmp_path) -> None:
+    """Алерт при падении ниже 5 и при 0 уходит всем ID из .env без проверки auth.json."""
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    import bot.telegram_bridge as bridge
+
+    monkeypatch.setattr(config, "RED_BIN_JSON_PATH", str(tmp_path / "red_bin.json"))
+    monkeypatch.setattr(config, "AUTH_JSON_PATH", str(tmp_path / "empty_auth.json"))
+    monkeypatch.setattr(config, "STOCK_LIMIT_ALERT_CHAT_ID", 111001)
+    monkeypatch.setattr(config, "STOCK_LIMIT_ALERT_CHAT_IDS", (111001, 222002))
+
+    ball = _ball(10)
+    upsert_red_bin(
+        {
+            "key": make_position_key(ball),
+            "group": "Мячи",
+            "brand": "Mikasa",
+            "name": ball["name"],
+            "last_qty": 10,
+        },
+        5,
+    )
+
+    mock_bot = AsyncMock()
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        monkeypatch.setattr(bridge, "_bot", mock_bot)
+        monkeypatch.setattr(bridge, "_loop", loop)
+
+        # 1. Падение ниже 5 (10 -> 4)
+        await asyncio.to_thread(apply_red_bin, [_ball(4)])
+        assert mock_bot.send_message.await_count == 2
+        called_chats = [c.kwargs["chat_id"] for c in mock_bot.send_message.await_args_list]
+        assert called_chats == [111001, 222002]
+        assert "начали продавать из корзины" in mock_bot.send_message.await_args_list[0].kwargs["text"]
+
+        # 2. Уход в 0 (4 -> 0)
+        mock_bot.send_message.reset_mock()
+        await asyncio.to_thread(apply_red_bin, [_ball(0)])
+        assert mock_bot.send_message.await_count == 2
+        assert "продали всё, остаток 0" in mock_bot.send_message.await_args_list[0].kwargs["text"]
+
+    asyncio.run(_run())
