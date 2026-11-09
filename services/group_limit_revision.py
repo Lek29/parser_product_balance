@@ -1,11 +1,12 @@
 """
-Еженедельная ревизия порогов по группам (``docs/fourty_role.md``, этап 7а).
+Еженедельная ревизия порогов (``docs/fourty_role.md``, этап 7а).
 
-Отдельная задача планировщика: при наличии лимитов в хранилище получает
-актуальный снимок остатков (локальный при критерии свежести из этапа 0 §4
-или цепочка почты через :func:`parser.mail_fetcher.fetch_and_save`),
-затем проверка лимитов только по группам из ``list_all_limits()`` и отправка
-алерта при нарушениях.
+Отдельная задача планировщика: при наличии лимитов или позиций Red Bin
+получает актуальный снимок остатков (локальный при критерии свежести
+или цепочка почты через :func:`parser.mail_fetcher.fetch_and_save`).
+
+Сводку «Остатки по лимитам групп» не шлёт — её открывают кнопкой
+«Лимиты по группам». На снимке остаётся проверка Red Bin.
 """
 
 from __future__ import annotations
@@ -19,10 +20,7 @@ from zoneinfo import ZoneInfo
 import config
 from parser.excel_parser import parse_stock
 from parser.mail_fetcher import MailFetchOutcome, fetch_and_save
-from services.stock_pipeline import (
-    run_parse_and_save_filtered,
-    send_group_limit_alerts_for_items,
-)
+from services.stock_pipeline import run_parse_and_save_filtered
 from storage.data_store import (
     get_last_check_date,
     list_all_limits,
@@ -131,14 +129,13 @@ def run_weekly_group_limit_revision() -> None:
     """
     Точка входа задачи планировщика «ревизия порогов по группам».
 
-    Если ``list_all_limits()`` пуст — выход без действий. Иначе получает
-    снимок (локально или через ``fetch_and_save``), затем одну проверку
-    лимитов и при необходимости отправку (см. этапы 3 и 5–6 в плане роли).
+    Если нет ни лимитов групп, ни позиций Red Bin — выход без действий.
+    Иначе получает снимок (локально или через ``fetch_and_save``) и
+    проверяет Red Bin. Сводку позиций по лимитам групп не отправляет.
 
     При ``MailFetchOutcome.UPDATED`` вызывается
-    ``run_parse_and_save_filtered`` (полный пайплайн и один алерт).
-    Иначе парсит ``current.xlsx`` и вызывает
-    ``send_group_limit_alerts_for_items``.
+    ``run_parse_and_save_filtered`` (полный пайплайн, без сводки групп).
+    Иначе парсит ``current.xlsx`` и проверяет только Red Bin.
 
     Исключения не пробрасывает наружу — только лог, чтобы не ронять бота.
 
@@ -164,11 +161,6 @@ def run_weekly_group_limit_revision() -> None:
                 len(limits),
             )
             items = parse_stock(config.CURRENT_XLSX_PATH)
-            if limits:
-                send_group_limit_alerts_for_items(
-                    items,
-                    log_context="weekly_revision",
-                )
             if red_bin_items:
                 apply_red_bin(items)
             return
@@ -207,11 +199,6 @@ def run_weekly_group_limit_revision() -> None:
             )
             return
 
-        if limits:
-            send_group_limit_alerts_for_items(
-                items,
-                log_context="weekly_revision",
-            )
         if red_bin_items:
             apply_red_bin(items)
 

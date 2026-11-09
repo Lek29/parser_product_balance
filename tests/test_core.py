@@ -527,11 +527,11 @@ def test_parse_stock_always_reads_columns_a_through_e(tmp_path: Path) -> None:
     assert items[0]["quantity"] == 2
 
 
-def test_run_parse_pipeline_single_telegram_send_for_multiple_groups(
+def test_run_parse_pipeline_does_not_push_group_limit_dump(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Этап 7: один прогон парсинга — одна отправка (HTML по всем группам).
+    Полный парс не шлёт сводку лимитов групп: её открывают кнопкой.
     """
     items = [
         {"top_category": "Альфа", "name": "s1", "quantity": 1},
@@ -574,10 +574,6 @@ def test_run_parse_pipeline_single_telegram_send_for_multiple_groups(
     all_n, filt_n = run_parse_and_save_filtered()
     assert all_n == 2
     assert filt_n == 0
-    assert len(sends) == 1
-    assert "Альфа" in sends[0] and "Бета" in sends[0]
-    sends.clear()
-    run_parse_and_save_filtered(notify_group_limits=False)
     assert sends == []
 
 
@@ -712,15 +708,19 @@ def test_local_snapshot_acceptable_via_updated_at_meta(
     assert local_snapshot_acceptable_for_limit_revision(reference=ref) is True
 
 
-def test_run_weekly_revision_local_path_calls_send(
+def test_run_weekly_revision_local_path_does_not_push_group_dump(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    items = [{"top_category": "А", "name": "x", "quantity": 1}]
-    sent: list[list[dict]] = []
+    """Локальный снимок ревизии не шлёт сводку лимитов групп."""
+    sent: list[str] = []
 
     monkeypatch.setattr(
         "services.group_limit_revision.list_all_limits",
         lambda: {"А": 5},
+    )
+    monkeypatch.setattr(
+        "services.group_limit_revision.list_red_bin",
+        dict,
     )
     monkeypatch.setattr(
         "services.group_limit_revision.local_snapshot_acceptable_for_limit_revision",
@@ -728,17 +728,17 @@ def test_run_weekly_revision_local_path_calls_send(
     )
     monkeypatch.setattr(
         "services.group_limit_revision.parse_stock",
-        lambda _p=None: items,
+        lambda _p=None: [{"top_category": "А", "name": "x", "quantity": 1}],
     )
     monkeypatch.setattr(
-        "services.group_limit_revision.send_group_limit_alerts_for_items",
-        lambda data, **_kw: sent.append(data),
+        "services.stock_pipeline.send_group_limit_alert_html",
+        lambda html: sent.append(html),
     )
 
     from services.group_limit_revision import run_weekly_group_limit_revision
 
     run_weekly_group_limit_revision()
-    assert len(sent) == 1 and sent[0] is items
+    assert sent == []
 
 
 def test_run_weekly_revision_updated_calls_full_pipeline(

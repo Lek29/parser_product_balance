@@ -467,22 +467,16 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📥 *Получить отфильтрованные остатки* — скачать Excel с позициями "
         f"≤ `{config.STOCK_THRESHOLD}` шт.\n"
         "🔀 *Частичная фильтрация* — разные пороги по группам товаров.\n"
-        "🎚 *Лимиты по группам* — пороги для *уведомлений* о малых остатках "
-        "по группе (см. блок ниже).\n"
+        "🎚 *Лимиты по группам* — порог на группу и сводка позиций, "
+        "у которых остаток не выше этого порога. Сама в чат не приходит.\n"
         "🔴 *Red Bin* — лимит на *одну* позицию: сообщения, когда остаток "
         "дошёл до лимита, когда его начали продавать и когда стало 0.\n\n"
-        "*Пороги по группам — уведомления*\n"
-        "Для товарной группы задаётся лимит (целое число шт.). Если по "
-        "позиции в этой группе остаток *не выше* лимита, бот формирует "
-        "сообщение со списком таких SKU.\n"
+        "*Пороги по группам*\n"
+        "Кнопка *«Лимиты по группам»* присылает список SKU с остатком "
+        "*не выше* лимита группы и открывает настройку порога.\n"
         "• Пресеты: `10`, `5`, `3` шт. или *свой порог* (ввод числом).\n"
-        "• *Снять лимит* — в том же режиме настройки, для выбранной группы.\n"
-        "• Сообщения уходят в *служебный чат Telegram*, который задаёт "
-        "администратор в настройках сервера (не в личку к вам).\n"
-        "• Пока лимит включён, группа на *надзоре*: дополнительно раз в "
-        "неделю выполняется ревизия остатков по этим лимитам (и проверки "
-        "после обновления данных). После снятия лимита группа с надзора "
-        "снимается.\n\n"
+        "• *Снять лимит* — в том же режиме, для выбранной группы.\n"
+        "• На обновлении остатков и на Red Bin эта сводка *не* шлётся.\n\n"
         "*Red Bin*\n"
         "Кнопками: группа → бренд → модель (мячи → Mikasa → мяч Mikasa MV300), "
         "затем лимит. Длинный список листается стрелками, «Назад» — на уровень выше. "
@@ -591,7 +585,7 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # SKIPPED_TODAY с force=True не вернётся, но оставляем на всякий случай
         if outcome == MailFetchOutcome.SKIPPED_TODAY:
             await query.edit_message_text("⏳ Файл этой недели уже есть — сверяю кэш таблицы...")
-            all_count, filtered_count = run_parse_and_save_filtered(notify_group_limits=False)
+            all_count, filtered_count = run_parse_and_save_filtered()
             reset_session_to_global(context)
             status = get_status_text()
             await query.edit_message_text(
@@ -606,7 +600,7 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # NO_CHANGES с force=True означает только одно: писем с архивами в ящике вообще нет
         if outcome == MailFetchOutcome.NO_CHANGES:
             await query.edit_message_text("⏳ Подходящих архивов на почте не найдено — сверяю локальный кэш таблицы...")
-            all_count, filtered_count = run_parse_and_save_filtered(notify_group_limits=False)
+            all_count, filtered_count = run_parse_and_save_filtered()
             reset_session_to_global(context)
             status = get_status_text()
             await query.edit_message_text(
@@ -630,7 +624,7 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         await query.edit_message_text("⏳ Обрабатываю таблицу...")
 
-        all_count, filtered_count = run_parse_and_save_filtered(notify_group_limits=False)
+        all_count, filtered_count = run_parse_and_save_filtered()
 
         reset_session_to_global(context)
 
@@ -840,6 +834,44 @@ async def cb_partial_start(
     )
 
 
+async def _send_group_limit_stock_report(bot, chat_id: int) -> None:
+    """
+    Шлёт сводку «Остатки по лимитам групп» в чат, где нажали кнопку.
+
+    Пустые лимиты и отсутствие нарушений — тишина: нечем забивать экран.
+    В служебный чат из ``.env`` отсюда не дублируем.
+
+    :param bot: Экземпляр бота PTB.
+    :type bot: telegram.Bot
+    :param chat_id: Чат нажатия.
+    :type chat_id: int
+    :returns: None
+    :side effects: Одно HTML-сообщение, если есть позиции на пороге или ниже.
+    """
+    from parser.excel_parser import find_group_limit_violations, parse_stock
+    from services.group_limit_alert_text import format_group_limit_alerts_html
+    from storage.data_store import list_all_limits
+
+    limits = list_all_limits()
+    if not limits or not os.path.isfile(config.CURRENT_XLSX_PATH):
+        return
+    try:
+        html = format_group_limit_alerts_html(
+            find_group_limit_violations(parse_stock(), limits),
+        )
+    except Exception:
+        logger.error("Лимиты по группам: сводка не собрана.", exc_info=True)
+        return
+    if not html:
+        return
+    await bot.send_message(
+        chat_id=chat_id,
+        text=html,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+    )
+
+
 async def cb_group_limit_start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -915,6 +947,8 @@ async def cb_group_limit_start(
         "Ниже — кнопки групп. Выберите группу, затем лимит: `10`, `5`, "
         "`3` или *свой* (целое ≥ 0). Кнопка *«Снять лимит»* удаляет порог "
         "для выбранной группы.\n\n"
+        "Сводка позиций с остатком не выше лимита — следующим сообщением. "
+        "На Red Bin и при обновлении остатков она не приходит.\n\n"
         "Нажмите *«В меню»*, чтобы выйти в главное меню.",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=main_keyboard(),
@@ -927,6 +961,7 @@ async def cb_group_limit_start(
             footer_done_text=LIMIT_REPLY_MENU_TEXT,
         ),
     )
+    await _send_group_limit_stock_report(context.bot, query.message.chat_id)
 
 
 async def cb_group_limit_threshold(

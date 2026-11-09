@@ -9,7 +9,8 @@
 
 * понедельник 09:00 — полный цикл почты и парсинга (:func:`fetch_and_parse`);
 * понедельник 09:30 — очистка лишних писем в Stock (:func:`weekly_stock_mail_cleanup`);
-* четверг 10:00 — ревизия лимитов (:func:`weekly_group_limit_revision`).
+* четверг 10:00 — ревизия Red Bin (:func:`weekly_group_limit_revision`).
+  Сводку лимитов групп задача не пишет: её открывают кнопкой.
 
 Частичная выгрузка (``filtered_partial.xlsx``) планировщиком **не** создаётся:
 пишется только глобальный ``filtered.xlsx`` (см. :func:`fetch_and_parse`).
