@@ -5,6 +5,13 @@ on:
     branches:
       - main
 
+# Репозиторий выдаёт GITHUB_TOKEN только на чтение. Job-level packages: write
+# на пуш в GHCR не хватает: токен уже выпущен без write_package, а buildx
+# ещё и шлёт attestation. Пишем пакет отсюда, без provenance.
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   lint:
     name: Run Linter
@@ -52,7 +59,7 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
+          username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image
@@ -60,7 +67,10 @@ jobs:
         with:
           context: .
           push: true
+          provenance: false
+          sbom: false
           tags: ghcr.io/lek29/parser_product_balance:latest
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
   deploy:
     name: Deploy to VPS

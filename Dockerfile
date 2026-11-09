@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 
+# GHCR связывает пакет с репозиторием по этой метке, иначе GITHUB_TOKEN
+# получает denied: permission_denied: write_package.
+LABEL org.opencontainers.image.source="https://github.com/Lek29/parser_product_balance"
+
 # unrar-free / unrar: нужен rarfile для распаковки .rar вложений с почты
 RUN apt-get update && apt-get install -y --no-install-recommends \
         unrar-free \
