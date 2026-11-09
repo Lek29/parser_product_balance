@@ -1,5 +1,7 @@
 .git
 .gitignore
+.github
+.pre-commit-config.yaml
 .cursor
 .venv
 venv
@@ -11,6 +13,19 @@ __pycache__
 .ruff_cache
 *.egg-info
 .env
+.env_example
+temp
+storage/current.xlsx
+storage/meta.json
+storage/data.json
+storage/auth.json
+storage/filtered.xlsx
+storage/filtered_partial.xlsx
+storage/weekly_snapshots
+storage/zero_sold_state.json
+storage/red_bin.json
+scripts
+reopr_about_fix
 docs
 tests
 *.md

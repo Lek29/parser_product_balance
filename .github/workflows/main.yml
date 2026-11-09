@@ -69,6 +69,8 @@ jobs:
           push: true
           provenance: false
           sbom: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: ghcr.io/lek29/parser_product_balance:latest
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
 

@@ -6,6 +6,7 @@
 работу при Ctrl+C.
 """
 
+import asyncio
 import logging
 
 from telegram import BotCommand, Update
@@ -44,32 +45,46 @@ async def _log_errors(update: object, context: ContextTypes.DEFAULT_TYPE) -> Non
         logger.debug("update_id при ошибке: %s", getattr(update, "update_id", update))
 
 
+async def _register_bot_commands(app: Application) -> None:
+    """
+    Регистрирует команды в меню Telegram в фоне, не блокируя старт polling.
+
+    :param app: Экземпляр Application из python-telegram-bot.
+    :type app: Application
+    :returns: None
+    """
+    try:
+        me = await app.bot.get_me()
+        logger.info(
+            "Telegram: бот @%s (id=%s), can_join_groups=%s",
+            me.username,
+            me.id,
+            me.can_join_groups,
+        )
+        await app.bot.set_my_commands(
+            [
+                BotCommand("start", "Запустить / Главное меню"),
+                BotCommand("help", "Справка по боту"),
+            ]
+        )
+        logger.info("Команды бота зарегистрированы в меню Telegram.")
+    except Exception as exc:
+        logger.warning("Не удалось зарегистрировать команды меню при старте: %s", exc)
+
+
 async def post_init(app: Application) -> None:
     """
     Вызывается после инициализации Application перед запуском polling.
 
-    Регистрирует мост для алертов из фоновых потоков, затем команды бота
-    в меню Telegram (кнопка ☰ Menu слева от поля ввода).
+    Регистрирует мост для алертов из фоновых потоков и запускает фоновую
+    регистрацию команд бота в меню Telegram (кнопка ☰ Menu слева от поля ввода).
 
     :param app: Экземпляр Application из python-telegram-bot.
     :type app: Application
     :returns: None
     """
     register_polling_bridge(app)
-    me = await app.bot.get_me()
-    logger.info(
-        "Telegram: бот @%s (id=%s), can_join_groups=%s",
-        me.username,
-        me.id,
-        me.can_join_groups,
-    )
-    await app.bot.set_my_commands(
-        [
-            BotCommand("start", "Запустить / Главное меню"),
-            BotCommand("help", "Справка по боту"),
-        ]
-    )
-    logger.info("Команды бота зарегистрированы в меню Telegram.")
+    asyncio.create_task(_register_bot_commands(app))
 
 
 def main() -> None:

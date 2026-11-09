@@ -6,13 +6,13 @@ services:
     env_file: .env
     environment:
       TZ: Europe/Moscow
-    cpus: 0.25
+    cpus: 0.75
     mem_limit: 128m
     mem_reservation: 64m
     deploy:
       resources:
         limits:
-          cpus: '0.25'
+          cpus: '0.75'
           memory: 128M
         reservations:
           memory: 64M
@@ -20,4 +20,4 @@ services:
       - ./storage:/app/storage
       - ./temp:/app/temp
     init: true
-    stop_grace_period: 45s
+    stop_grace_period: 15s
