@@ -229,7 +229,13 @@ def test_red_bin_sends_to_env_chat_ids_on_below_five_and_zero(monkeypatch, tmp_p
         assert called_chats == [111001, 222002]
         assert "начали продавать из корзины" in mock_bot.send_message.await_args_list[0].kwargs["text"]
 
-        # 2. Уход в 0 (4 -> 0)
+        # 2. Следующая неделя: остаток всё ещё в корзине (4 -> 3) при reset_ranks=True шлёт снова
+        mock_bot.send_message.reset_mock()
+        await asyncio.to_thread(lambda: apply_red_bin([_ball(3)], reset_ranks=True))
+        assert mock_bot.send_message.await_count == 2
+        assert "начали продавать из корзины" in mock_bot.send_message.await_args_list[0].kwargs["text"]
+
+        # 3. Уход в 0 (3 -> 0)
         mock_bot.send_message.reset_mock()
         await asyncio.to_thread(apply_red_bin, [_ball(0)])
         assert mock_bot.send_message.await_count == 2

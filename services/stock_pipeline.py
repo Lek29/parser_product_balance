@@ -191,7 +191,7 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
 
     from services.red_bin import apply_red_bin
 
-    apply_red_bin(all_items)
+    apply_red_bin(all_items, reset_ranks=True)
 
     from services.zero_sold import run_zero_sold_check_after_parse
 

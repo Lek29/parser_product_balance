@@ -214,7 +214,7 @@ def browse_tree(items: list[dict]) -> dict[str, dict[str, dict[str, list[dict]]]
     return tree
 
 
-def apply_red_bin(items: list[dict]) -> None:
+def apply_red_bin(items: list[dict], *, reset_ranks: bool = False) -> None:
     """
     Сравнивает реестр Red Bin со снимком и шлёт новые стадии в чат лимитов.
 
@@ -224,11 +224,13 @@ def apply_red_bin(items: list[dict]) -> None:
 
     :param items: Полный список позиций после ``parse_stock``.
     :type items: list[dict]
+    :param reset_ranks: ``True`` на новом снимке недели — слать каждую неделю по всем в корзине.
+    :type reset_ranks: bool
     :returns: None
     :side effects: ``storage/red_bin.json`` и Telegram, если есть новые стадии.
     """
     try:
-        _apply_red_bin(items)
+        _apply_red_bin(items, reset_ranks=reset_ranks)
     except Exception:
         logger.error("red_bin phase=apply result=unexpected_error", exc_info=True)
 
@@ -256,7 +258,7 @@ def _compact_row(raw: dict) -> Optional[dict]:
     }
 
 
-def _apply_red_bin(items: list[dict]) -> None:
+def _apply_red_bin(items: list[dict], *, reset_ranks: bool = False) -> None:
     registry = list_red_bin()
     if not registry:
         logger.info("red_bin phase=skip reason=empty")
@@ -280,7 +282,8 @@ def _apply_red_bin(items: list[dict]) -> None:
 
         row = stock.get(str(rec.get("key") or ""))
         now_qty: Optional[int] = int(row["quantity"]) if row is not None else None
-        new_rank, stages = advance_rank(stored, zone_rank(now_qty, limit))
+        base_rank = 0 if reset_ranks else stored
+        new_rank, stages = advance_rank(base_rank, zone_rank(now_qty, limit))
         stored_qty = 0 if now_qty is None else now_qty
         if new_rank != stored or stored_qty != prev_qty:
             rec["rank"] = new_rank

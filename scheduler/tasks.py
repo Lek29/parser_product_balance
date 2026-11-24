@@ -59,12 +59,11 @@ def fetch_and_parse() -> None:
             )
             return
 
-        # NO_CHANGES / UPDATED: парсим локальный xlsx (нужно для zero-sold на границе недели).
-        # shortcut: при SKIPPED_TODAY выше return — в начале новой недели skip не срабатывает.
-        from services.stock_pipeline import run_parse_and_save_filtered
-
         if outcome == MailFetchOutcome.NO_CHANGES:
-            logger.info("Планировщик: IMAP без новых писем — локальный parse.")
+            logger.info("Планировщик: новых писем пока нет — ждём следующую проверку.")
+            return
+
+        from services.stock_pipeline import run_parse_and_save_filtered
 
         all_count, filtered_count = run_parse_and_save_filtered()
 
@@ -149,11 +148,12 @@ def create_scheduler() -> BackgroundScheduler:
     """
     scheduler = BackgroundScheduler(timezone="Europe/Moscow")
 
+    # shortcut: опрос раз в час пн 09:00–18:00 МСК; после первой загрузки срабатывает SKIPPED_TODAY
     scheduler.add_job(
         func=fetch_and_parse,
         trigger=CronTrigger(
             day_of_week="mon",
-            hour=9,
+            hour="9-18",
             minute=0,
             timezone="Europe/Moscow",
         ),
@@ -167,8 +167,8 @@ def create_scheduler() -> BackgroundScheduler:
         func=weekly_stock_mail_cleanup,
         trigger=CronTrigger(
             day_of_week="mon",
-            hour=9,
-            minute=30,
+            hour=19,
+            minute=0,
             timezone="Europe/Moscow",
         ),
         id="stock_mail_cleanup_weekly",
