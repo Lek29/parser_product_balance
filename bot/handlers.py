@@ -481,8 +481,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Кнопками: группа → бренд → модель (мячи → Mikasa → мяч Mikasa MV300), "
         "затем лимит. Длинный список листается стрелками, «Назад» — на уровень выше. "
         "Пресеты `10` / `5` / `3` или своё число ≥ 1. "
-        "*Снять* — на карточке товара. *Список* — все лимиты в чат или файлом.\n"
-        "На следующем полном обновлении остатков бот пишет в служебный чат:\n"
+        "*Снять* — на карточке товара. *Список* — две кнопки: в чат или файлом. "
+        "Кнопка *«Актуализировать остатки»* этот список не присылает.\n"
+        "Плановая загрузка с почты пишет в служебный чат:\n"
         "• остаток стал равен лимиту;\n"
         "• остаток стал меньше лимита (один раз, пока не пополнят);\n"
         "• остаток 0 или строка пропала из файла.\n"
@@ -578,14 +579,16 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # Кнопка всегда принудительно качает лучшее найденное письмо (force=True),
         # игнорируя кэш текущей недели и проверку "письмо не новее сохранённого".
-        outcome = fetch_and_save(force=True)
+        outcome = await asyncio.to_thread(fetch_and_save, True)
 
         from services.stock_pipeline import run_parse_and_save_filtered
 
         # SKIPPED_TODAY с force=True не вернётся, но оставляем на всякий случай
         if outcome == MailFetchOutcome.SKIPPED_TODAY:
             await query.edit_message_text("⏳ Файл этой недели уже есть — сверяю кэш таблицы...")
-            all_count, filtered_count = run_parse_and_save_filtered()
+            all_count, filtered_count = await asyncio.to_thread(
+                run_parse_and_save_filtered, red_bin_alerts=False
+            )
             reset_session_to_global(context)
             status = get_status_text()
             await query.edit_message_text(
@@ -600,7 +603,9 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # NO_CHANGES с force=True означает только одно: писем с архивами в ящике вообще нет
         if outcome == MailFetchOutcome.NO_CHANGES:
             await query.edit_message_text("⏳ Подходящих архивов на почте не найдено — сверяю локальный кэш таблицы...")
-            all_count, filtered_count = run_parse_and_save_filtered()
+            all_count, filtered_count = await asyncio.to_thread(
+                run_parse_and_save_filtered, red_bin_alerts=False
+            )
             reset_session_to_global(context)
             status = get_status_text()
             await query.edit_message_text(
@@ -624,7 +629,9 @@ async def cb_actualize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         await query.edit_message_text("⏳ Обрабатываю таблицу...")
 
-        all_count, filtered_count = run_parse_and_save_filtered()
+        all_count, filtered_count = await asyncio.to_thread(
+            run_parse_and_save_filtered, red_bin_alerts=False
+        )
 
         reset_session_to_global(context)
 

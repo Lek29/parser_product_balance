@@ -214,7 +214,7 @@ def browse_tree(items: list[dict]) -> dict[str, dict[str, dict[str, list[dict]]]
     return tree
 
 
-def apply_red_bin(items: list[dict], *, reset_ranks: bool = False) -> None:
+def apply_red_bin(items: list[dict], *, reset_ranks: bool = False, notify: bool = True) -> None:
     """
     Сравнивает реестр Red Bin со снимком и шлёт новые стадии в чат лимитов.
 
@@ -226,11 +226,13 @@ def apply_red_bin(items: list[dict], *, reset_ranks: bool = False) -> None:
     :type items: list[dict]
     :param reset_ranks: ``True`` на новом снимке недели — слать каждую неделю по всем в корзине.
     :type reset_ranks: bool
+    :param notify: ``False`` с кнопки «Актуализировать»: rank обновить, в чат не писать.
+    :type notify: bool
     :returns: None
-    :side effects: ``storage/red_bin.json`` и Telegram, если есть новые стадии.
+    :side effects: ``storage/red_bin.json`` и Telegram, если есть новые стадии и ``notify``.
     """
     try:
-        _apply_red_bin(items, reset_ranks=reset_ranks)
+        _apply_red_bin(items, reset_ranks=reset_ranks, notify=notify)
     except Exception:
         logger.error("red_bin phase=apply result=unexpected_error", exc_info=True)
 
@@ -258,7 +260,7 @@ def _compact_row(raw: dict) -> Optional[dict]:
     }
 
 
-def _apply_red_bin(items: list[dict], *, reset_ranks: bool = False) -> None:
+def _apply_red_bin(items: list[dict], *, reset_ranks: bool = False, notify: bool = True) -> None:
     registry = list_red_bin()
     if not registry:
         logger.info("red_bin phase=skip reason=empty")
@@ -300,8 +302,9 @@ def _apply_red_bin(items: list[dict], *, reset_ranks: bool = False) -> None:
     if changed:
         save_red_bin_items(registry)
 
-    for html in pending:
-        send_group_limit_alert_html(html)
+    if notify:
+        for html in pending:
+            send_group_limit_alert_html(html)
 
     logger.info(
         "red_bin registry=%d messages=%d stages=%s",

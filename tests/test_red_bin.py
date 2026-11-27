@@ -191,6 +191,32 @@ def test_apply_red_bin_one_message_and_silent_baseline(monkeypatch, tmp_path) ->
     assert sent == []
 
 
+def test_apply_red_bin_notify_false_keeps_rank_silent(monkeypatch, tmp_path) -> None:
+    """Кнопка «Актуализировать» обновляет rank и не шлёт карточки."""
+    monkeypatch.setattr(config, "RED_BIN_JSON_PATH", str(tmp_path / "red_bin.json"))
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "services.red_bin.send_group_limit_alert_html",
+        lambda html: sent.append(html),
+    )
+    ball = _ball(10)
+    upsert_red_bin(
+        {
+            "key": make_position_key(ball),
+            "group": "Мячи",
+            "brand": "Mikasa",
+            "name": ball["name"],
+            "last_qty": 10,
+        },
+        5,
+    )
+    apply_red_bin([_ball(4)], reset_ranks=True, notify=False)
+    assert sent == []
+    saved = list_red_bin()["1"]
+    assert saved["rank"] == 2
+    assert saved["last_qty"] == 4
+
+
 def test_red_bin_sends_to_env_chat_ids_on_below_five_and_zero(monkeypatch, tmp_path) -> None:
     """Алерт при падении ниже 5 и при 0 уходит всем ID из .env без проверки auth.json."""
     import asyncio

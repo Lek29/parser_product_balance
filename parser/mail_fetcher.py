@@ -325,7 +325,8 @@ def _connect_imap() -> imaplib.IMAP4_SSL:
     :raises imaplib.IMAP4.error: При неверных учётных данных или недоступности сервера.
     """
     logger.info("Подключение к IMAP серверу %s...", config.EMAIL_IMAP_SERVER)
-    imap = imaplib.IMAP4_SSL(config.EMAIL_IMAP_SERVER, 993)
+    # timeout: без него зависший сокет держит поток хэндлера вечно, polling молчит
+    imap = imaplib.IMAP4_SSL(config.EMAIL_IMAP_SERVER, 993, timeout=60)
     imap.login(config.EMAIL_ADDRESS, config.EMAIL_PASSWORD)
     logger.info("Авторизация успешна: %s", config.EMAIL_ADDRESS)
     return imap

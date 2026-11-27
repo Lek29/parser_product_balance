@@ -139,7 +139,7 @@ def send_group_limit_alerts_for_items(
         )
 
 
-def run_parse_and_save_filtered() -> tuple[int, int]:
+def run_parse_and_save_filtered(*, red_bin_alerts: bool = True) -> tuple[int, int]:
     """
     Парсит ``storage/current.xlsx``, пишет ``data.json`` и глобальный ``filtered.xlsx``.
 
@@ -161,6 +161,7 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
     :rtype: tuple[int, int]
     :side effects: Обновляет ``data.json`` и ``filtered.xlsx`` в ``storage/``.
                    Red Bin — :func:`services.red_bin.apply_red_bin` на том же полном парсе.
+                   ``red_bin_alerts=False`` — кнопка «Актуализировать»: rank пишется, карточки нет.
                    Zero-sold push — :func:`services.zero_sold.run_zero_sold_check_after_parse`
                    только при полном парсе (не на cache-hit).
     """
@@ -180,7 +181,7 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
             )
         from services.red_bin import apply_red_bin
 
-        apply_red_bin(all_items)
+        apply_red_bin(all_items, notify=red_bin_alerts)
         return len(all_items), len(filtered)
 
     fp = current_xlsx_fingerprint()
@@ -191,7 +192,7 @@ def run_parse_and_save_filtered() -> tuple[int, int]:
 
     from services.red_bin import apply_red_bin
 
-    apply_red_bin(all_items, reset_ranks=True)
+    apply_red_bin(all_items, reset_ranks=True, notify=red_bin_alerts)
 
     from services.zero_sold import run_zero_sold_check_after_parse
 
